@@ -1,246 +1,223 @@
-# IdleQuest — C# .NET Backend Architecture
+# IdleQuest
 
-> **Multiplayer-ready, event-driven, clean DDD backend for the IdleQuest Idle RPG.**
-
----
-
-## Project Structure
-
-```
-IdleQuest.Backend/
-└── src/
-    ├── IdleQuest.Domain/          # Core business logic — zero framework deps
-    │   └── Models.cs              # Aggregates, value objects, events, helpers
-    │
-    ├── IdleQuest.Application/     # Use cases, interfaces, DTOs
-    │   └── Application.cs         # Service contracts + full service implementations
-    │
-    ├── IdleQuest.Infrastructure/  # EF Core, Redis, SignalR, JWT
-    │   └── Infrastructure.cs      # DbContext, repositories, auth, caching, hub
-    │
-    └── IdleQuest.API/             # ASP.NET Core Web API
-        ├── API.cs                 # Controllers, middleware, background services
-        └── Program.cs             # DI composition root + middleware pipeline
-```
+Idle RPG with a **.NET 8** backend (clean architecture: Domain → Application → Infrastructure → API) and a **vanilla front-end** (`index.html` + Tailwind) in the repo root.
 
 ---
 
-## Architecture Overview
+## Repository layout
 
 ```
-┌─────────────────────────────────────────────────────────────┐
-│                      IdleQuest Frontend                      │
-│              (index.html — vanilla JS / Tailwind)            │
-└────────────────────┬────────────────────┬────────────────────┘
-                     │ REST (JWT)          │ WebSocket (SignalR)
-                     ▼                    ▼
-┌────────────────────────────────────────────────────────────────┐
-│                       API Layer                                │
-│  AuthController  PlayerController  CombatController  ...      │
-│  GlobalExceptionMiddleware  RateLimitAttribute                 │
-│  Background: AutoCombatTick | WorldEventScheduler | AutoSave  │
-└─────────────────────────┬──────────────────────────────────────┘
-                          │
-┌─────────────────────────▼──────────────────────────────────────┐
-│                   Application Layer                            │
-│  PlayerService  CombatService  QuestService  SaveLoadService  │
-│  IDomainEventDispatcher  IGameHubNotifier  ICacheService       │
-└──────────────┬────────────────────────────┬────────────────────┘
-               │                            │
-┌──────────────▼──────────┐  ┌─────────────▼───────────────────┐
-│      Domain Layer       │  │     Infrastructure Layer        │
-│  Player (Aggregate)     │  │  EF Core (SQL Server)           │
-│  Item / Quest / Enemy   │  │  Redis (cache + SignalR hub)    │
-│  Zone / NPC / Combat    │  │  JWT Auth  (BCrypt passwords)   │
-│  StatBlock (VO)         │  │  DomainEventDispatcher          │
-│  DomainEvents           │  │  GameHub (SignalR)              │
-│  DomainException        │  │  Repositories (1 per aggregate) │
-└─────────────────────────┘  └─────────────────────────────────┘
+├── index.html                 # UI (client-side demo state; not wired to API by default)
+├── api-client.js              # Browser helper `idleQuestApi` for REST calls (set API_BASE_URL)
+├── IdleQuest.Backend/
+│   ├── IdleQuest.sln
+│   ├── global.json            # SDK: .NET 8 (roll-forward)
+│   ├── docker-compose.yml     # Optional local Redis
+│   ├── DEPENDENCIES.txt       # What to install (SDK, Docker, etc.)
+│   ├── run-api.cmd            # Windows: start API
+│   └── src/
+│       ├── IdleQuest.Domain/          # Aggregates, value objects, domain events
+│       ├── IdleQuest.Application/     # DTOs, interfaces, application services
+│       ├── IdleQuest.Infrastructure/  # EF Core, JWT, cache, SignalR, seed
+│       └── IdleQuest.API/             # Controllers, middleware, Program.cs
 ```
 
 ---
 
-## Key Design Decisions
+## What you need installed
 
-### 1. Domain-Driven Design (DDD)
-- **Aggregates** (`Player`, `CombatSession`, etc.) are the only mutation entry points.
-- All state changes raise **domain events** — no direct cross-aggregate calls.
-- `DomainException` flows up to `GlobalExceptionMiddleware` → clean HTTP 400.
+| Requirement | Notes |
+|-------------|--------|
+| **.NET 8 SDK** | [Download](https://dotnet.microsoft.com/download/dotnet/8.0) — `dotnet --version` should show `8.0.x`. |
+| **NuGet packages** | Restored automatically on `dotnet build` / `dotnet run` (no manual install). |
 
-### 2. Event-Driven Logic
-```
-Player.GainXP()  →  PlayerLeveledUp event
-  └─► PlayerLeveledUpHandler.HandleAsync()
-        └─► IGameHubNotifier.NotifyPlayerAsync("LevelUp", {...})
-              └─► Frontend receives real-time SignalR push
-```
-Adding new behaviors (achievements, analytics) = add a handler, zero existing code changes.
+**Optional:** **Docker** + `docker compose up -d` in `IdleQuest.Backend` for **Redis** (see `docker-compose.yml`). If `ConnectionStrings:Redis` is empty, the API uses **in-memory** distributed cache and still runs on a single machine.
 
-### 3. Value Objects
-`StatBlock` is an **immutable record** — equipment bonuses compose with `Add()` cleanly:
-```csharp
-var effective = baseStats.Add(weapon.Bonus).Add(armor.Bonus);
-```
+**Optional:** `dotnet dev-certs https --trust` for trusted HTTPS in development.
 
-### 4. Multiplayer-Ready SignalR
-- Per-player groups: `player:{id}` — push level-ups, loot, quest completions.
-- Per-zone groups: `zone:{id}` — broadcast player arrivals/departures.
-- Redis backplane (`AddStackExchangeRedis`) enables horizontal scaling across pods.
-
-### 5. Idle Reward System
-`CombatService.ClaimIdleRewardsAsync()` computes offline XP/gold from `LastLoginAt`:
-- Capped at 8 hours of offline gains.
-- Auto-save service persists online players every 2 minutes to `SaveSlot.Auto`.
-
-### 6. Save / Load
-Full player snapshots stored as compressed JSON in `SaveGame.Snapshot`.
-- 4 slots: `Auto`, `Manual1`, `Manual2`, `Manual3`.
-- Version field enables forward-compatible migration on load.
-
-### 7. Clean Cache Strategy
-| Cache Key         | TTL    | Invalidated on         |
-|-------------------|--------|------------------------|
-| `player:{id}`     | 5 min  | Any player mutation    |
-| `leaderboard:top` | 2 min  | Rolling expiry         |
-| `zone:{id}`       | 10 min | Admin update           |
+Details: `IdleQuest.Backend/DEPENDENCIES.txt`.
 
 ---
 
-## API Endpoints Summary
+## Run the API
 
-| Method | Path                          | Description                      |
-|--------|-------------------------------|----------------------------------|
-| POST   | `/api/auth/register`          | Register new account             |
-| POST   | `/api/auth/login`             | Login → JWT + refresh token      |
-| POST   | `/api/auth/refresh`           | Refresh expired JWT              |
-| GET    | `/api/player/me`              | Current player state             |
-| PATCH  | `/api/player/me/rename`       | Rename hero                      |
-| PATCH  | `/api/player/me/class`        | Change class (Warrior→Mage etc.) |
-| POST   | `/api/player/me/prestige`     | Prestige reset (requires lv 50)  |
-| GET    | `/api/player/leaderboard`     | Top players                      |
-| GET    | `/api/inventory`              | Full inventory                   |
-| POST   | `/api/inventory/equip/{id}`   | Equip item                       |
-| DELETE | `/api/inventory/equip/{slot}` | Unequip slot                     |
-| POST   | `/api/inventory/{id}/sell`    | Sell item for gold               |
-| GET    | `/api/quests/available`       | Quests player can accept         |
-| POST   | `/api/quests/{id}/accept`     | Accept a quest                   |
-| POST   | `/api/quests/{id}/complete`   | Complete & claim rewards         |
-| POST   | `/api/combat/start/{zoneId}`  | Enter combat in zone             |
-| POST   | `/api/combat/{session}/attack`| Manual attack                    |
-| POST   | `/api/combat/{session}/flee`  | Attempt to flee                  |
-| POST   | `/api/combat/idle-rewards`    | Claim offline idle gains         |
-| GET    | `/api/npcs/zone/{zoneId}`     | NPCs in current zone             |
-| POST   | `/api/npcs/{id}/dialogue`     | Start NPC dialogue               |
-| GET    | `/api/npcs/{id}/shop`         | NPC shop inventory               |
-| POST   | `/api/npcs/{id}/shop/{item}`  | Purchase item from NPC           |
-| GET    | `/api/world/zones`            | All zones + unlock status        |
-| POST   | `/api/world/zones/{id}/travel`| Travel to zone                   |
-| GET    | `/api/saves`                  | List save slots                  |
-| POST   | `/api/saves/{slot}`           | Save game                        |
-| POST   | `/api/saves/{slot}/load`      | Load game from slot              |
-
-**SignalR Hub:** `wss://{host}/hubs/game?access_token={jwt}`
-
-### Server → Client Events
-| Event           | Payload                               | Trigger                    |
-|-----------------|---------------------------------------|----------------------------|
-| `LevelUp`       | `{ newLevel, bonusHp, bonusAtk }`     | Player levels up           |
-| `CombatStarted` | `{ sessionId, enemyName, enemyHp }`   | Combat begins              |
-| `CombatUpdate`  | `CombatStateDto`                      | Each attack/flee           |
-| `CombatVictory` | `{ xpGained, goldGained, lootCount }` | Enemy defeated             |
-| `QuestCompleted`| `{ title, xpReward, goldReward }`     | Quest finished             |
-| `Prestige`      | `{ newPrestigeLevel, message }`       | Prestige completed         |
-| `WorldEvents`   | `WorldEventDto[]`                     | Active event broadcast     |
-
----
-
-## Quick Start
-
-### Prerequisites
-- .NET 8 SDK
-- SQL Server (or LocalDB for dev)
-- Redis (or `docker run -p 6379:6379 redis`)
-
-### 1. Configure `appsettings.Development.json`
-```json
-{
-  "ConnectionStrings": {
-    "IdleQuest": "Server=(localdb)\\mssqllocaldb;Database=IdleQuestDev;Trusted_Connection=True;",
-    "Redis": "localhost:6379"
-  },
-  "Jwt": {
-    "SecretKey": "CHANGE-THIS-TO-A-256-BIT-SECRET-IN-PRODUCTION",
-    "Issuer": "idlequest-api",
-    "Audience": "idlequest-client"
-  },
-  "AllowedOrigins": ["http://localhost:5173", "http://127.0.0.1:5500"]
-}
-```
-
-### 2. Apply Migrations
 ```bash
-cd src/IdleQuest.Infrastructure
-dotnet ef migrations add InitialCreate --startup-project ../IdleQuest.API
-dotnet ef database update --startup-project ../IdleQuest.API
+cd IdleQuest.Backend
+dotnet run --project src/IdleQuest.API
 ```
 
-### 3. Run
-```bash
-cd src/IdleQuest.API
-dotnet run
-# Swagger: https://localhost:7xxx/swagger
+Or on Windows: double-click `IdleQuest.Backend/run-api.cmd`.
+
+- **HTTP / HTTPS** ports are shown in the console; defaults are in `src/IdleQuest.API/Properties/launchSettings.json` (e.g. `http://localhost:5098`, `https://localhost:7098`).
+- **Swagger** (OpenAPI) is enabled only in **Development** — open `/swagger` on the HTTPS or HTTP base URL.
+- **Health:** `GET /health` (no auth).
+- **Database:** **SQLite** file `idlequest.db` is created in the **current working directory** when the API runs (EF Core `EnsureCreated` + **seed** on startup: zones, enemies, items, merchant NPC, sample quests).
+
+Configuration: `IdleQuest.Backend/src/IdleQuest.API/appsettings.json` (`ConnectionStrings:IdleQuest`, `Jwt`, `AllowedOrigins`).
+
+---
+
+## Architecture (implemented)
+
+```
+┌─────────────────────────┐
+│  Browser UI (optional) │   index.html / Live Server / VS Code
+└────────────┬────────────┘
+             │  HTTPS + JWT (Bearer)     │  WebSocket (SignalR)
+             ▼                             ▼
+┌────────────────────────────────────────────────────────────┐
+│  IdleQuest.API — controllers, JWT, CORS, Swagger (dev),    │
+│  ExceptionHandlingMiddleware → DomainException → HTTP 400   │
+└────────────────────────────┬───────────────────────────────┘
+                             │
+┌────────────────────────────▼───────────────────────────────┐
+│  Application — PlayerAppService, CombatService, WorldService,
+│  InventoryService, QuestAppService, SaveLoadService, NpcAppService,
+│  IDomainEventDispatcher, DTOs                               │
+└──────────────┬─────────────────────────────┬─────────────┘
+               │                               │
+┌──────────────▼──────────────┐   ┌────────────▼──────────────┐
+│  Domain                     │   │  Infrastructure          │
+│  Player, Enemy, Quest, …    │   │  EF Core SQLite          │
+│  StatBlock, DomainEvent     │   │  JWT + BCrypt            │
+│                             │   │  Redis or memory cache    │
+│                             │   │  SignalR GameHub + notifier │
+│                             │   │  Repositories, seed       │
+└─────────────────────────────┘   └───────────────────────────┘
 ```
 
-### 4. Connect Frontend
-In `index.html`, replace the in-memory `gameState` with API calls:
+**SignalR:** Hub URL `/hubs/game`. Pass the JWT as query **`access_token`** (same token as `Authorization: Bearer`).
+
+**Redis:** If `ConnectionStrings:Redis` is set, StackExchange Redis is used for **distributed cache** and optionally **SignalR scale-out** (`AddStackExchangeRedis` on the SignalR builder in `Program.cs`).
+
+**Design notes**
+
+- **DDD-style** aggregates and **domain events** (`PlayerLeveledUp`, `PrestigeCompleted`) with handlers that push SignalR notifications where wired.
+- **`StatBlock`** composes with **`Add()`** for effective stats.
+- **Idle rewards:** `POST /api/combat/idle-rewards` uses `LastLoginAt`, capped at **8 hours** of simulated offline gains (no separate background “auto-save every 2 minutes” worker in this repo).
+
+---
+
+## API endpoints
+
+Base URL example: `http://localhost:5098/api` (adjust to your run output).
+
+| Method | Path | Auth |
+|--------|------|------|
+| POST | `/auth/register` | Body: `username`, `password`, `heroName`, **`class`** (JSON property name is `class`) |
+| POST | `/auth/login` | Returns JWT + `refreshToken` |
+| POST | `/auth/refresh` | Body: `{ "refreshToken": "..." }` |
+| GET | `/player/me` | Bearer |
+| PATCH | `/player/me/rename` | Body: `{ "name": "..." }` |
+| PATCH | `/player/me/class` | Body: `{ "class": "Warrior" }` |
+| POST | `/player/me/prestige` | Bearer |
+| GET | `/player/leaderboard` | Public |
+| GET | `/inventory` | Bearer |
+| POST | `/inventory/equip/{itemId}` | Bearer |
+| DELETE | `/inventory/equip/{slot}` | `slot` = `weapon` or `armor` |
+| POST | `/inventory/{itemId}/sell` | Bearer |
+| GET | `/quests/available` | Bearer |
+| POST | `/quests/{id}/accept` | Bearer |
+| POST | `/quests/{id}/complete` | Bearer |
+| POST | `/combat/start/{zoneId}` | Bearer |
+| POST | `/combat/{sessionId}/attack` | Bearer |
+| POST | `/combat/{sessionId}/flee` | Bearer |
+| POST | `/combat/idle-rewards` | Bearer |
+| GET | `/npcs/zone/{zoneId}` | Public |
+| POST | `/npcs/{id}/dialogue` | Bearer |
+| GET | `/npcs/{id}/shop` | Bearer |
+| POST | `/npcs/{npcId}/shop/{itemId}` | Bearer |
+| GET | `/world/zones` | Bearer |
+| POST | `/world/zones/{zoneId}/travel` | Bearer |
+| GET | `/saves` | Bearer |
+| POST | `/saves/{slot}` | Slot enum name: `Auto`, `Manual1`, … |
+| POST | `/saves/{slot}/load` | Bearer |
+
+### SignalR (server → client) — current wiring
+
+| Event | When |
+|--------|------|
+| `LevelUp` | Domain handler after level-up |
+| `Prestige` | Domain handler after prestige |
+| `CombatStarted` | Combat started |
+| `CombatUpdate` | After attack / flee (also sent to caller from hub) |
+| `CombatVictory` | Enemy defeated |
+| `PlayerEnteredZone` | Hub `JoinZone` |
+| `WorldState` | Hub `RequestWorldState` |
+
+---
+
+## Front-end and `api-client.js`
+
+`api-client.js` exposes a global **`idleQuestApi`** object (no bundler). Set **`idleQuestApi.API_BASE_URL`** to match your API (scheme + host + port + `/api`).
+
+The stock **`index.html`** is a self-contained demo and is **not** automatically connected to the API. To integrate, load `api-client.js` and call the API from your own script (or a separate page) using the same origin/CORS rules as in `appsettings.json` → `AllowedOrigins`.
+
+### Example: login (fetch)
+
 ```js
-// Example: login
-const res = await fetch('https://localhost:7xxx/api/auth/login', {
+const res = await fetch('http://localhost:5098/api/auth/login', {
   method: 'POST',
   headers: { 'Content-Type': 'application/json' },
-  body: JSON.stringify({ username: 'hero42', password: 'secret' })
+  body: JSON.stringify({ username: 'hero1', password: 'yourPassword' })
 });
-const { token, player } = await res.json();
+const data = await res.json();
+if (data.token) localStorage.setItem('token', data.token);
+```
 
-// Example: SignalR connection
+### Example: SignalR (JavaScript client)
+
+Add `@microsoft/signalr` or a CDN script, then connect with the same base URL as the site and pass the token:
+
+```js
 const connection = new signalR.HubConnectionBuilder()
-  .withUrl('/hubs/game', { accessTokenFactory: () => token })
+  .withUrl('http://localhost:5098/hubs/game', {
+    accessTokenFactory: () => localStorage.getItem('token')
+  })
   .withAutomaticReconnect()
   .build();
-
-connection.on('LevelUp', ({ newLevel }) => showToast(`Level up! → ${newLevel}`, 'amber'));
+connection.on('LevelUp', payload => console.log(payload));
 await connection.start();
 ```
 
 ---
 
-## NuGet Packages Required
+## NuGet packages (reference)
 
-```xml
-<!-- IdleQuest.Infrastructure.csproj -->
-<PackageReference Include="Microsoft.EntityFrameworkCore.SqlServer" Version="8.*" />
-<PackageReference Include="Microsoft.EntityFrameworkCore.Tools" Version="8.*" />
-<PackageReference Include="StackExchange.Redis" Version="2.*" />
-<PackageReference Include="Microsoft.Extensions.Caching.StackExchangeRedis" Version="8.*" />
-<PackageReference Include="Microsoft.AspNetCore.SignalR.StackExchangeRedis" Version="8.*" />
-<PackageReference Include="Microsoft.AspNetCore.Authentication.JwtBearer" Version="8.*" />
-<PackageReference Include="Microsoft.IdentityModel.Tokens" Version="7.*" />
-<PackageReference Include="BCrypt.Net-Next" Version="4.*" />
+Versions are pinned in the `.csproj` files; restore is automatic.
 
-<!-- IdleQuest.API.csproj -->
-<PackageReference Include="Swashbuckle.AspNetCore" Version="6.*" />
-<PackageReference Include="AspNetCore.HealthChecks.Redis" Version="8.*" />
-```
+**IdleQuest.Infrastructure**
+
+- `Microsoft.EntityFrameworkCore.Sqlite`
+- `Microsoft.EntityFrameworkCore.Design` (private assets / tooling)
+- `Microsoft.AspNetCore.SignalR.StackExchangeRedis`
+- `Microsoft.Extensions.Caching.StackExchangeRedis`
+- `Microsoft.AspNetCore.Authentication.JwtBearer`
+- `BCrypt.Net-Next`
+
+**IdleQuest.API**
+
+- `Swashbuckle.AspNetCore`
+- `Microsoft.AspNetCore.SignalR.StackExchangeRedis`
 
 ---
 
-## Scaling Path
+## Moving to SQL Server or EF migrations
 
-| Scale Step | What to Add |
-|------------|-------------|
-| Multi-instance | Redis SignalR backplane (already wired) |
-| High read load | Read replicas + CQRS read models |
-| Combat throughput | Queue-based tick processing (Azure Service Bus / RabbitMQ) |
-| Analytics | Domain events → Kafka → ClickHouse |
-| Anti-cheat | Server-side validation of all stat calculations (already done) |
-| Mobile | Same REST + SignalR API — no changes needed |
+Default setup uses **SQLite** and **`EnsureCreated`** + seed for a friction-free clone-and-run workflow.
+
+For production you typically:
+
+1. Switch **`UseSqlite`** to **`UseSqlServer`** (or another provider) in `IdleQuest.Infrastructure` registration.
+2. Replace **`EnsureCreated`** with **EF Core migrations** (`dotnet ef migrations add`, `dotnet ef database update`) and move seed data to migrations or an explicit seed runner.
+
+---
+
+## Scaling ideas (roadmap)
+
+| Goal | Direction |
+|------|-----------|
+| Multiple API instances | Redis for SignalR backplane + shared cache (already optional when Redis is configured) |
+| Stronger persistence | SQL Server / Postgres + migrations |
+| Heavy combat load | Queue-backed processing |
+| Analytics | Publish domain events to a bus / warehouse |

@@ -1,0 +1,34 @@
+IdleQuest.Backend — what to install
+====================================
+
+REQUIRED (build & run the API)
+------------------------------
+1) .NET 8 SDK
+   Download: https://dotnet.microsoft.com/download/dotnet/8.0
+   Verify:    dotnet --version   (should report 8.0.x)
+
+   NuGet packages are restored automatically on first build:
+     dotnet restore IdleQuest.sln
+
+OPTIONAL — Redis (multi-instance cache + SignalR backplane)
+-----------------------------------------------------------
+• Docker Desktop (Windows/Mac) OR Docker Engine (Linux)
+• Start Redis:
+    docker compose up -d
+  from this folder (IdleQuest.Backend).
+
+• Point the API at Redis by setting connection string, e.g. in appsettings.json:
+    "ConnectionStrings": { "Redis": "localhost:6379" }
+
+  If Redis is omitted or empty, the API uses in-memory distributed cache (fine for single machine).
+
+OPTIONAL — tooling
+------------------
+• IDE: Visual Studio 2022 (workload: ASP.NET and web development) or VS Code + C# Dev Kit
+• HTTPS dev certificate (first run may prompt):
+    dotnet dev-certs https --trust
+
+NOT REQUIRED for default setup
+-------------------------------
+• SQL Server — the template uses SQLite (file idlequest.db next to the running API).
+• Node.js — only if you add a JS build pipeline later.

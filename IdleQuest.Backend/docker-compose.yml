@@ -1,0 +1,10 @@
+# Optional: Redis for distributed cache + SignalR scale-out.
+# Usage: docker compose up -d
+# Then set ConnectionStrings__Redis=localhost:6379 in appsettings or env.
+
+services:
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    command: redis-server --appendonly yes
