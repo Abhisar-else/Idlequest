@@ -1,0 +1,850 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>IdleQuest • Idle RPG</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css">
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/microsoft-signalr/7.0.5/signalr.min.js"></script>
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Press+Start+2P&display=swap');
+        :root { --primary: 234 179 8; }
+        .game-container { font-family: 'Press Start 2P', system-ui; background: linear-gradient(180deg, #1a1a2e 0%, #0f0f1e 100%); }
+        .pixel-border { image-rendering: pixelated; border: 4px solid #eab308; box-shadow: 0 0 0 6px #422006, 0 0 0 10px #78350f; }
+        .stat-bar { height: 18px; background: #334155; border: 2px solid #eab308; position: relative; overflow: hidden; }
+        .stat-fill { height: 100%; background: linear-gradient(90deg, #eab308, #f59e0b); transition: width 0.6s cubic-bezier(0.34, 1.56, 0.64, 1); }
+        .character-avatar { width: 120px; height: 120px; background: linear-gradient(135deg, #78350f, #451a03); border: 6px solid #eab308; display: flex; align-items: center; justify-content: center; font-size: 52px; box-shadow: inset 0 0 30px rgba(0,0,0,0.6); }
+        .log-entry { animation: logPop 0.4s ease forwards; }
+        @keyframes logPop { 0% { opacity:0; transform:translateY(15px); } 100% { opacity:1; transform:translateY(0); } }
+        .zone-card { transition: all 0.2s cubic-bezier(0.4,0,0.2,1); }
+        .zone-card:hover { transform: translateY(-8px) scale(1.03); box-shadow: 0 0 25px -5px rgb(234 179 8); }
+        .header-glow { text-shadow: 0 0 10px rgb(234 179 8), 0 0 20px rgb(234 179 8); }
+        .spin { animation: spin 1s linear infinite; }
+        @keyframes spin { to { transform: rotate(360deg); } }
+    </style>
+</head>
+<body class="game-container text-amber-100 min-h-screen">
+
+<!-- ═══════════════════════════════════════════════════════════ LOGIN SCREEN -->
+<div id="login-screen" class="min-h-screen flex items-center justify-center">
+    <div class="pixel-border bg-zinc-900 p-10 w-full max-w-md">
+        <div class="text-center mb-8">
+            <div class="text-5xl mb-4">⚔️</div>
+            <h1 class="text-3xl font-bold header-glow text-amber-300 mb-2">IDLEQUEST</h1>
+            <p class="text-xs text-amber-500">ADVENTURE AWAITS...</p>
+        </div>
+
+        <div class="flex gap-2 mb-6">
+            <button onclick="showTab('login')" id="tab-login"
+                class="flex-1 py-2 text-xs border-2 border-amber-400 bg-amber-900 text-amber-100">LOGIN</button>
+            <button onclick="showTab('register')" id="tab-register"
+                class="flex-1 py-2 text-xs border-2 border-amber-700 text-amber-500">REGISTER</button>
+        </div>
+
+        <!-- Login Form -->
+        <div id="form-login">
+            <div class="space-y-4 mb-6">
+                <input id="login-username" type="text" placeholder="USERNAME"
+                    class="w-full bg-zinc-800 border-2 border-amber-700 text-amber-100 px-4 py-3 text-xs outline-none focus:border-amber-400"
+                    onkeydown="if(event.key==='Enter')doLogin()">
+                <input id="login-password" type="password" placeholder="PASSWORD"
+                    class="w-full bg-zinc-800 border-2 border-amber-700 text-amber-100 px-4 py-3 text-xs outline-none focus:border-amber-400"
+                    onkeydown="if(event.key==='Enter')doLogin()">
+            </div>
+            <button onclick="doLogin()" id="login-btn"
+                class="w-full bg-amber-400 hover:bg-amber-300 text-black font-bold py-4 text-xs tracking-widest transition-colors">
+                ENTER THE REALM
+            </button>
+        </div>
+
+        <!-- Register Form -->
+        <div id="form-register" class="hidden">
+            <div class="space-y-4 mb-4">
+                <input id="reg-username" type="text" placeholder="USERNAME (max 20 chars)"
+                    class="w-full bg-zinc-800 border-2 border-amber-700 text-amber-100 px-4 py-3 text-xs outline-none focus:border-amber-400">
+                <input id="reg-heroname" type="text" placeholder="HERO NAME"
+                    class="w-full bg-zinc-800 border-2 border-amber-700 text-amber-100 px-4 py-3 text-xs outline-none focus:border-amber-400">
+                <input id="reg-password" type="password" placeholder="PASSWORD"
+                    class="w-full bg-zinc-800 border-2 border-amber-700 text-amber-100 px-4 py-3 text-xs outline-none focus:border-amber-400">
+                <select id="reg-class"
+                    class="w-full bg-zinc-800 border-2 border-amber-700 text-amber-100 px-4 py-3 text-xs outline-none focus:border-amber-400">
+                    <option value="Warrior">⚔️ WARRIOR</option>
+                    <option value="Mage">🔥 MAGE</option>
+                    <option value="Rogue">🗡️ ROGUE</option>
+                </select>
+            </div>
+            <button onclick="doRegister()" id="reg-btn"
+                class="w-full bg-emerald-600 hover:bg-emerald-500 text-white font-bold py-4 text-xs tracking-widest transition-colors">
+                CREATE HERO
+            </button>
+        </div>
+
+        <div id="auth-error" class="hidden mt-4 text-red-400 text-xs text-center"></div>
+    </div>
+</div>
+
+<!-- ═══════════════════════════════════════════════════════════ GAME SCREEN -->
+<div id="game-screen" class="max-w-7xl mx-auto hidden">
+
+    <!-- HEADER -->
+    <header class="bg-black border-b-4 border-amber-400 py-3 px-6 flex items-center justify-between">
+        <div class="flex items-center gap-x-3">
+            <div class="w-10 h-10 bg-amber-400 text-black flex items-center justify-center text-3xl rotate-12">⚔️</div>
+            <div>
+                <h1 class="text-3xl font-bold tracking-widest header-glow text-amber-300">IDLEQUEST</h1>
+                <p class="text-[10px] text-amber-500 -mt-1">ADVENTURE AWAITS...</p>
+            </div>
+        </div>
+
+        <div class="flex items-center gap-x-8 text-sm">
+            <div onclick="switchTab(0)" id="tab-0" class="tab-button flex items-center gap-x-2 px-5 py-2 hover:bg-amber-900 rounded cursor-pointer border border-transparent active">
+                <i class="fa-solid fa-house"></i><span>DASHBOARD</span>
+            </div>
+            <div onclick="switchTab(1)" id="tab-1" class="tab-button flex items-center gap-x-2 px-5 py-2 hover:bg-amber-900 rounded cursor-pointer border border-transparent">
+                <i class="fa-solid fa-map"></i><span>ZONES</span>
+            </div>
+            <div onclick="switchTab(2)" id="tab-2" class="tab-button flex items-center gap-x-2 px-5 py-2 hover:bg-amber-900 rounded cursor-pointer border border-transparent">
+                <i class="fa-solid fa-sword"></i><span>COMBAT</span>
+            </div>
+            <div onclick="switchTab(3)" id="tab-3" class="tab-button flex items-center gap-x-2 px-5 py-2 hover:bg-amber-900 rounded cursor-pointer border border-transparent">
+                <i class="fa-solid fa-backpack"></i><span>INVENTORY</span>
+            </div>
+        </div>
+
+        <div class="flex items-center gap-x-4">
+            <div class="flex items-center bg-zinc-900 border border-amber-400 rounded-full px-4 py-1 text-xs">
+                <div class="w-3 h-3 bg-green-400 rounded-full animate-pulse mr-2"></div>
+                <span id="header-name" class="font-mono">HERO</span>
+            </div>
+            <div onclick="logout()" class="flex items-center justify-center w-9 h-9 bg-zinc-900 hover:bg-red-900 border border-amber-400 rounded-xl cursor-pointer">
+                <i class="fa-solid fa-right-from-bracket"></i>
+            </div>
+        </div>
+    </header>
+
+    <div class="flex">
+        <!-- SIDEBAR -->
+        <div class="w-72 bg-zinc-950 border-r-4 border-amber-400 p-5 flex flex-col">
+            <div class="pixel-border bg-zinc-900 p-4 mb-6">
+                <div class="flex justify-center mb-3">
+                    <div id="avatar" class="character-avatar text-6xl flex items-center justify-center">🛡️</div>
+                </div>
+                <div class="text-center">
+                    <div id="hero-name" class="text-xl font-bold text-amber-200 w-full text-center">HERO</div>
+                </div>
+                <div class="flex justify-center gap-x-2 mt-2 text-xs">
+                    <div id="class-name" class="px-3 py-1 bg-amber-900 text-amber-300 rounded-md">WARRIOR</div>
+                </div>
+            </div>
+
+            <div class="space-y-5">
+                <div>
+                    <div class="flex justify-between text-xs mb-1 font-mono">
+                        <div>LVL <span id="level" class="text-amber-300">1</span></div>
+                        <div class="text-emerald-400" id="xp-text">0 / 420 XP</div>
+                    </div>
+                    <div class="stat-bar"><div id="xp-bar" class="stat-fill" style="width:0%"></div></div>
+                </div>
+                <div>
+                    <div class="flex justify-between text-xs mb-1 font-mono">
+                        <div class="flex items-center gap-x-1"><i class="fa-solid fa-heart text-red-400"></i><span>HP</span></div>
+                        <div><span id="hp-current">100</span>/<span id="hp-max">100</span></div>
+                    </div>
+                    <div class="stat-bar"><div id="hp-bar" class="stat-fill bg-red-500" style="width:100%"></div></div>
+                </div>
+                <div class="grid grid-cols-2 gap-4 text-xs">
+                    <div>
+                        <div class="flex items-center gap-x-2 mb-2"><i class="fa-solid fa-bolt text-yellow-400"></i><span class="font-mono">ATK</span></div>
+                        <div id="atk-value" class="text-3xl font-bold text-orange-300">0</div>
+                    </div>
+                    <div>
+                        <div class="flex items-center gap-x-2 mb-2"><i class="fa-solid fa-shield-halved text-sky-400"></i><span class="font-mono">DEF</span></div>
+                        <div id="def-value" class="text-3xl font-bold text-sky-300">0</div>
+                    </div>
+                </div>
+                <div class="bg-zinc-900 border border-amber-400 p-3 rounded-xl flex items-center justify-between">
+                    <div class="flex items-center gap-x-3">
+                        <i class="fa-solid fa-coins text-yellow-300 text-2xl"></i>
+                        <div>
+                            <div class="text-xs tracking-widest">GOLD</div>
+                            <div id="gold" class="text-2xl font-bold text-yellow-300">0</div>
+                        </div>
+                    </div>
+                    <div onclick="claimIdleRewards()" class="text-[10px] bg-emerald-900 hover:bg-emerald-700 px-4 py-2 rounded-lg cursor-pointer flex items-center gap-x-1">
+                        <i class="fa-solid fa-clock"></i><span>CLAIM</span>
+                    </div>
+                </div>
+            </div>
+
+            <div class="mt-auto pt-8">
+                <div class="text-[10px] font-mono text-center text-amber-500 mb-2">CURRENT ZONE</div>
+                <div id="current-zone" class="bg-zinc-900 border border-amber-400 text-center py-4 rounded-2xl text-sm font-bold">LOADING...</div>
+            </div>
+
+            <div class="text-center text-[10px] text-amber-600 mt-auto pt-8">
+                SESSION: <span id="session-time" class="font-mono">00:00</span>
+            </div>
+        </div>
+
+        <!-- MAIN CONTENT -->
+        <div class="flex-1 p-6">
+
+            <!-- DASHBOARD -->
+            <div id="screen-0">
+                <div class="grid grid-cols-12 gap-6">
+                    <div class="col-span-12 lg:col-span-7 bg-zinc-900 border border-amber-400 rounded-3xl p-6 pixel-border">
+                        <div class="flex gap-8">
+                            <div class="flex-1">
+                                <div class="uppercase text-xs tracking-[2px] mb-3 text-amber-400">YOUR HERO</div>
+                                <h2 id="hero-name-big" class="text-5xl font-bold text-white">HERO</h2>
+                                <div class="flex items-center gap-x-4 mt-2">
+                                    <div id="hero-class-big" class="px-5 py-1 bg-orange-900 text-orange-200 text-sm rounded-2xl">WARRIOR</div>
+                                    <div class="flex items-center text-xs bg-zinc-800 px-4 h-7 rounded-2xl">
+                                        <span class="text-emerald-400">LVL</span>
+                                        <span id="level-big" class="ml-2 text-2xl font-bold text-emerald-300">1</span>
+                                    </div>
+                                </div>
+                                <div class="mt-10 space-y-6">
+                                    <div class="flex items-center">
+                                        <div class="w-28 text-xs font-mono">NEXT LEVEL</div>
+                                        <div class="flex-1"><div class="stat-bar"><div id="xp-bar-main" class="stat-fill" style="width:0%"></div></div></div>
+                                        <div id="xp-remaining" class="w-20 text-right text-xs font-mono">420 XP</div>
+                                    </div>
+                                    <div onclick="startCombat()" class="flex items-center justify-center gap-x-4 bg-red-700 hover:bg-red-600 transition-colors text-white h-14 rounded-2xl cursor-pointer text-sm tracking-wider">
+                                        <i class="fa-solid fa-skull"></i><span>BEGIN IDLE COMBAT</span>
+                                    </div>
+                                </div>
+                            </div>
+                            <div class="w-52 flex flex-col items-center justify-center border-l border-amber-400 pl-8">
+                                <div id="hero-emoji" class="text-[110px] leading-none mb-4">🛡️</div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="col-span-12 lg:col-span-5 bg-zinc-900 border border-amber-400 rounded-3xl p-6 pixel-border">
+                        <div class="uppercase text-xs mb-4 flex items-center gap-x-2">
+                            <i class="fa-solid fa-scroll"></i><span>ACTIVE QUESTS</span>
+                        </div>
+                        <div id="quest-list" class="space-y-3 text-xs">
+                            <div class="opacity-40 italic">No active quests</div>
+                        </div>
+                        <div class="mt-4">
+                            <button onclick="loadAvailableQuests()" class="text-[10px] bg-amber-900 hover:bg-amber-700 px-4 py-2 rounded-lg cursor-pointer">
+                                VIEW AVAILABLE QUESTS
+                            </button>
+                        </div>
+                        <div id="available-quests" class="mt-4 space-y-2 hidden"></div>
+                    </div>
+
+                    <div class="col-span-12 bg-zinc-900 border border-amber-400 rounded-3xl p-5 pixel-border h-80 overflow-hidden flex flex-col">
+                        <div class="flex justify-between items-baseline border-b border-amber-400 pb-3 mb-3">
+                            <div class="uppercase text-xs tracking-widest">Combat Log</div>
+                            <div onclick="clearLog()" class="text-[10px] text-red-300 cursor-pointer hover:text-red-400">CLEAR</div>
+                        </div>
+                        <div id="combat-log" class="flex-1 font-mono text-xs overflow-y-auto space-y-3 text-amber-200"></div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- ZONES -->
+            <div id="screen-1" class="hidden">
+                <h2 class="text-xl font-bold mb-6 flex items-center gap-x-3">
+                    <i class="fa-solid fa-map-location-dot"></i><span>EXPLORE THE REALM</span>
+                </h2>
+                <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6" id="zones-grid"></div>
+            </div>
+
+            <!-- COMBAT -->
+            <div id="screen-2" class="hidden">
+                <div class="max-w-md mx-auto">
+                    <div class="bg-zinc-900 border-4 border-red-500 rounded-3xl p-6 text-center">
+                        <div class="uppercase text-red-400 text-xs mb-1 tracking-widest">ENEMY ENCOUNTER</div>
+                        <div id="enemy-name" class="text-4xl font-bold text-white mb-1">GOBLIN</div>
+                        <div id="enemy-level" class="text-xs text-red-300">LVL 1</div>
+                        <div class="flex justify-center my-8">
+                            <div id="enemy-emoji" onclick="manualAttack()" class="text-8xl w-40 h-40 flex items-center justify-center bg-zinc-800 rounded-2xl border-4 border-red-400 cursor-pointer">👹</div>
+                        </div>
+                        <div class="stat-bar mx-auto max-w-[220px]">
+                            <div id="enemy-hp-bar" class="stat-fill bg-red-500" style="width:100%"></div>
+                        </div>
+                        <div class="flex justify-between text-xs mt-2 font-mono">
+                            <div>ENEMY HP</div>
+                            <div><span id="enemy-hp-text">100</span>/<span id="enemy-hp-max">100</span></div>
+                        </div>
+                        <div class="flex gap-x-4 mt-10">
+                            <button onclick="manualAttack()" id="attack-btn"
+                                class="flex-1 bg-red-600 hover:bg-red-500 transition-all py-6 rounded-2xl text-white font-bold text-sm tracking-widest flex items-center justify-center gap-x-2">
+                                <i class="fa-solid fa-swords"></i><span>ATTACK</span>
+                            </button>
+                            <button onclick="fleeCombat()" class="flex-1 bg-zinc-700 hover:bg-zinc-600 transition-all py-6 rounded-2xl text-white font-bold text-sm tracking-widest">FLEE</button>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- INVENTORY -->
+            <div id="screen-3" class="hidden">
+                <div class="flex justify-between items-end mb-6">
+                    <h2 class="text-xl font-bold">INVENTORY</h2>
+                    <div id="inv-slots" class="text-xs bg-emerald-900 text-emerald-100 px-5 py-2 rounded-3xl">0 / 24 SLOTS</div>
+                </div>
+                <div class="grid grid-cols-4 gap-4" id="inventory-grid"></div>
+                <div class="mt-12">
+                    <div class="text-xs uppercase mb-4 text-amber-400">EQUIPPED</div>
+                    <div class="flex gap-6" id="equipped-items"></div>
+                </div>
+            </div>
+        </div>
+
+        <!-- RIGHT RAIL -->
+        <div class="w-64 bg-zinc-950 border-l-4 border-amber-400 p-6 hidden xl:flex flex-col">
+            <div class="text-xs font-mono bg-black p-4 rounded-2xl border border-amber-300">
+                <div class="flex justify-between py-3 border-b border-amber-900">
+                    <span class="text-gray-400">ENEMIES SLAIN</span>
+                    <span id="enemies-slain" class="font-bold text-amber-300">0</span>
+                </div>
+                <div class="flex justify-between py-3">
+                    <span class="text-gray-400">ITEMS FOUND</span>
+                    <span id="items-found" class="font-bold text-amber-300">0</span>
+                </div>
+            </div>
+            <div onclick="prestigeReset()" class="mt-8 text-center text-[10px] text-purple-400 hover:text-purple-300 cursor-pointer">
+                PRESTIGE RESET <i class="fa-solid fa-arrow-rotate-right"></i>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- TOAST -->
+<div id="toast" onclick="this.classList.add('hidden')"
+     class="hidden fixed bottom-6 right-6 bg-zinc-800 border border-emerald-400 text-emerald-300 px-6 py-4 rounded-2xl shadow-2xl flex items-center gap-x-3 z-50">
+    <i class="fa-solid fa-circle-check"></i>
+    <span id="toast-text" class="font-medium text-xs"></span>
+</div>
+
+<!-- GAME OVER MODAL -->
+<div onclick="if(event.target.id==='modal-backdrop')hideModal()" id="modal-backdrop"
+     class="hidden fixed inset-0 bg-black/80 flex items-center justify-center z-50">
+    <div onclick="event.stopImmediatePropagation()"
+         class="max-w-md w-full bg-zinc-900 border-4 border-amber-400 rounded-3xl p-8 text-center">
+        <div class="text-7xl mb-6">💀</div>
+        <h3 class="text-3xl font-bold mb-2">YOUR HERO FELL...</h3>
+        <p class="text-amber-400 text-sm mb-8">But fear not! Your progress has been saved.</p>
+        <button onclick="hideModal();showScreen(0)"
+        class="w-full h-14 bg-amber-400 text-black font-bold rounded-2xl text-xs mb-3">CONTINUE ADVENTURING</button>
+<button onclick="hideModal();startCombat()"
+        class="w-full h-14 bg-red-700 hover:bg-red-600 text-white font-bold rounded-2xl text-xs mb-3">FIGHT AGAIN</button>
+<button onclick="claimIdleRewards();hideModal();showScreen(0)"
+        class="w-full h-14 bg-zinc-700 hover:bg-zinc-600 text-white font-bold rounded-2xl text-xs">CLAIM IDLE REWARDS</button>
+    </div>
+</div>
+
+<script>
+// ─── CONFIG ────────────────────────────────────────────────────────────────
+const API = 'http://localhost:5098/api';   // change port if yours differs
+let token        = localStorage.getItem('iq_token') || '';
+let currentZoneId = 1;
+let activeCombat  = null;   // { sessionId, enemyMaxHp }
+let sessionStart  = Date.now();
+let player        = null;
+let hubConnection = null;
+
+// ─── AUTH HELPERS ──────────────────────────────────────────────────────────
+function authHeader() {
+    return token ? { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' } : { 'Content-Type': 'application/json' };
+}
+
+async function apiFetch(path, method = 'GET', body = null) {
+    const opts = { method, headers: authHeader() };
+    if (body) opts.body = JSON.stringify(body);
+    const res = await fetch(API + path, opts);
+    if (res.status === 401) { logout(); return null; }
+    if (!res.ok) {
+        const err = await res.json().catch(() => ({ message: res.statusText }));
+        throw new Error(err.message || res.statusText);
+    }
+    if (res.status === 204) return null;
+    return res.json();
+}
+
+// ─── LOGIN / REGISTER ──────────────────────────────────────────────────────
+function showTab(t) {
+    document.getElementById('form-login').classList.toggle('hidden',    t !== 'login');
+    document.getElementById('form-register').classList.toggle('hidden', t !== 'register');
+    document.getElementById('tab-login').className    = `flex-1 py-2 text-xs border-2 ${t==='login'    ? 'border-amber-400 bg-amber-900 text-amber-100' : 'border-amber-700 text-amber-500'}`;
+    document.getElementById('tab-register').className = `flex-1 py-2 text-xs border-2 ${t==='register' ? 'border-amber-400 bg-amber-900 text-amber-100' : 'border-amber-700 text-amber-500'}`;
+    document.getElementById('auth-error').classList.add('hidden');
+}
+
+function setAuthError(msg) {
+    const el = document.getElementById('auth-error');
+    el.textContent = msg;
+    el.classList.remove('hidden');
+}
+
+async function doLogin() {
+    const username = document.getElementById('login-username').value.trim();
+    const password = document.getElementById('login-password').value;
+    if (!username || !password) { setAuthError('Fill in all fields'); return; }
+
+    document.getElementById('login-btn').innerHTML = '<i class="fa-solid fa-spinner spin mr-2"></i>ENTERING...';
+    try {
+        const data = await apiFetch('/auth/login', 'POST', { username, password });
+        if (!data) return;
+        token = data.token;
+        localStorage.setItem('iq_token', token);
+        await enterGame();
+    } catch(e) {
+        setAuthError(e.message || 'Login failed');
+    } finally {
+        document.getElementById('login-btn').innerHTML = 'ENTER THE REALM';
+    }
+}
+
+async function doRegister() {
+    const username = document.getElementById('reg-username').value.trim();
+    const heroName = document.getElementById('reg-heroname').value.trim();
+    const password = document.getElementById('reg-password').value;
+    const cls      = document.getElementById('reg-class').value;
+    if (!username || !heroName || !password) { setAuthError('Fill in all fields'); return; }
+
+    document.getElementById('reg-btn').innerHTML = '<i class="fa-solid fa-spinner spin mr-2"></i>CREATING...';
+    try {
+        const data = await apiFetch('/auth/register', 'POST', { username, password, heroName, class: cls });
+        if (!data) return;
+        token = data.token;
+        localStorage.setItem('iq_token', token);
+        await enterGame();
+    } catch(e) {
+        setAuthError(e.message || 'Registration failed');
+    } finally {
+        document.getElementById('reg-btn').innerHTML = 'CREATE HERO';
+    }
+}
+
+function logout() {
+    localStorage.removeItem('iq_token');
+    token = '';
+    if (hubConnection) hubConnection.stop();
+    document.getElementById('login-screen').classList.remove('hidden');
+    document.getElementById('game-screen').classList.add('hidden');
+}
+
+// ─── ENTER GAME ────────────────────────────────────────────────────────────
+async function enterGame() {
+    await loadPlayer();
+    await loadZones();
+    document.getElementById('login-screen').classList.add('hidden');
+    document.getElementById('game-screen').classList.remove('hidden');
+    showScreen(0);
+    startSessionTimer();
+    connectSignalR();
+    setInterval(loadPlayer, 30000);   // refresh player every 30s
+    addToLog('Welcome back to IdleQuest!', 'amber');
+}
+
+// ─── PLAYER ────────────────────────────────────────────────────────────────
+async function loadPlayer() {
+    try {
+        player = await apiFetch('/player/me');
+        if (!player) return;
+        updateUI();
+    } catch(e) { console.error('loadPlayer:', e); }
+}
+
+function updateUI() {
+    if (!player) return;
+    const p = player;
+    const eff = p.effectiveStats || { maxHp: p.currentHp, attack: 0, defense: 0 };
+
+    document.getElementById('header-name').textContent  = p.heroName || p.username;
+    document.getElementById('hero-name').textContent    = (p.heroName || 'HERO').toUpperCase();
+    document.getElementById('hero-name-big').textContent = (p.heroName || 'HERO').toUpperCase();
+
+    const classEmojis = { Warrior:'🛡️', Mage:'🔥', Rogue:'🗡️' };
+    const emoji = classEmojis[p.class] || '🛡️';
+    document.getElementById('avatar').innerHTML   = emoji;
+    document.getElementById('hero-emoji').innerHTML= emoji;
+    document.getElementById('class-name').textContent  = (p.class || 'WARRIOR').toUpperCase();
+    document.getElementById('hero-class-big').textContent = (p.class || 'WARRIOR').toUpperCase();
+
+    document.getElementById('level').textContent     = p.level;
+    document.getElementById('level-big').textContent = p.level;
+
+    const xpPct = p.experienceToNext > 0 ? Math.floor(p.experience / p.experienceToNext * 100) : 0;
+    document.getElementById('xp-bar').style.width      = xpPct + '%';
+    document.getElementById('xp-bar-main').style.width = xpPct + '%';
+    document.getElementById('xp-text').textContent     = `${p.experience} / ${p.experienceToNext} XP`;
+    document.getElementById('xp-remaining').textContent = (p.experienceToNext - p.experience) + ' XP';
+
+    const hp    = p.currentHp;
+    const maxHp = p.maxHp || eff.maxHp || 100;
+    const hpPct = maxHp > 0 ? Math.floor(hp / maxHp * 100) : 0;
+    document.getElementById('hp-bar').style.width  = hpPct + '%';
+    document.getElementById('hp-current').textContent = hp;
+    document.getElementById('hp-max').textContent     = maxHp;
+
+    document.getElementById('atk-value').textContent = p.attack  || eff.attack  || 0;
+    document.getElementById('def-value').textContent = p.defense || eff.defense || 0;
+    document.getElementById('gold').textContent      = p.gold;
+
+    document.getElementById('enemies-slain').textContent = p.enemiesSlain || 0;
+    document.getElementById('items-found').textContent   = p.itemsFound   || 0;
+
+    document.getElementById('current-zone').textContent = p.currentZoneName || 'Zone ' + (p.currentZoneId || 1);
+    currentZoneId = p.currentZoneId || 1;
+
+    renderQuestList(p.activeQuests || []);
+    if (document.getElementById('screen-3').classList.contains('hidden') === false) renderInventory();
+}
+
+// ─── QUESTS ────────────────────────────────────────────────────────────────
+function renderQuestList(quests) {
+    const el = document.getElementById('quest-list');
+    if (!quests || quests.length === 0) {
+        el.innerHTML = '<div class="opacity-40 italic">No active quests</div>';
+        return;
+    }
+    el.innerHTML = quests.map(q => `
+        <div class="border border-amber-700 rounded-xl p-3">
+            <div class="font-bold text-amber-200">${q.title}</div>
+            <div class="text-amber-500 mt-1">Progress: ${q.progress || 0} / ${q.targetAmount || 1}</div>
+            ${q.completed ? '<div class="text-emerald-400 mt-1">✓ READY TO COMPLETE</div>' : ''}
+            ${q.completed ? `<button onclick="completeQuest('${q.questId}')" class="mt-2 text-[10px] bg-emerald-800 px-3 py-1 rounded">CLAIM REWARD</button>` : ''}
+        </div>
+    `).join('');
+}
+
+async function loadAvailableQuests() {
+    const el = document.getElementById('available-quests');
+    el.classList.remove('hidden');
+    el.innerHTML = '<div class="text-xs opacity-50">Loading...</div>';
+    try {
+        const quests = await apiFetch('/quests/available');
+        if (!quests || quests.length === 0) {
+            el.innerHTML = '<div class="text-xs opacity-40">No quests available at your level.</div>';
+            return;
+        }
+        el.innerHTML = quests.map(q => `
+            <div class="border border-amber-700 rounded-xl p-3 text-xs">
+                <div class="font-bold text-amber-200">${q.title}</div>
+                <div class="text-amber-500">Req LVL ${q.requiredLevel} | +${q.xpReward} XP | +${q.goldReward} Gold</div>
+                <button onclick="acceptQuest('${q.id}')" class="mt-2 text-[10px] bg-amber-900 hover:bg-amber-700 px-3 py-1 rounded">ACCEPT</button>
+            </div>
+        `).join('');
+    } catch(e) { el.innerHTML = `<div class="text-xs text-red-400">${e.message}</div>`; }
+}
+
+async function acceptQuest(id) {
+    try {
+        await apiFetch(`/quests/${id}/accept`, 'POST');
+        showToast('Quest accepted!', 'amber');
+        await loadPlayer();
+        document.getElementById('available-quests').classList.add('hidden');
+    } catch(e) { showToast(e.message, 'red'); }
+}
+
+async function completeQuest(id) {
+    try {
+        await apiFetch(`/quests/${id}/complete`, 'POST');
+        showToast('Quest completed! Rewards claimed!', 'emerald');
+        await loadPlayer();
+    } catch(e) { showToast(e.message, 'red'); }
+}
+
+// ─── ZONES ─────────────────────────────────────────────────────────────────
+async function loadZones() {
+    try {
+        const zones = await apiFetch('/world/zones');
+        if (!zones) return;
+        const container = document.getElementById('zones-grid');
+        container.innerHTML = '';
+        zones.forEach(zone => {
+            const active = zone.id === currentZoneId ? 'ring-2 ring-offset-4 ring-offset-zinc-950 ring-amber-400' : '';
+            const el = document.createElement('div');
+            el.className = `zone-card bg-zinc-900 border border-amber-400 rounded-3xl p-6 cursor-pointer ${active}`;
+            el.innerHTML = `
+                <div class="flex justify-between">
+                    <div class="text-5xl">${zone.emoji || '🌍'}</div>
+                    <div class="text-${zone.isUnlocked ? 'emerald' : 'red'}-300 text-xs h-fit px-3 pt-1 pb-0.5 border border-${zone.isUnlocked ? 'emerald' : 'red'}-400 rounded">
+                        ${zone.isUnlocked ? 'UNLOCKED' : 'LOCKED'}
+                    </div>
+                </div>
+                <div class="mt-8">
+                    <div class="font-bold text-xl">${zone.name}</div>
+                    <div class="text-xs text-amber-400">RECOMMENDED LVL ${zone.recommendedLevel}</div>
+                </div>
+            `;
+            el.onclick = async () => {
+                if (!zone.isUnlocked) { showToast('Zone locked! Reach level ' + zone.recommendedLevel, 'amber'); return; }
+                try {
+                    await apiFetch(`/world/zones/${zone.id}/travel`, 'POST');
+                    currentZoneId = zone.id;
+                    showToast('Travelled to ' + zone.name, 'emerald');
+                    await loadPlayer();
+                    loadZones();
+                } catch(e) { showToast(e.message, 'red'); }
+            };
+            container.appendChild(el);
+        });
+    } catch(e) { console.error('loadZones:', e); }
+}
+
+// ─── COMBAT ────────────────────────────────────────────────────────────────
+async function startCombat() {
+    try {
+        if (player && player.currentHp <= 0) {
+            player.currentHp = Math.floor((player.maxHp || 120) * 0.6);
+            updateUI();
+        }
+        const state = await apiFetch(`/combat/start/${currentZoneId}`, 'POST');
+        if (!state) return;
+        activeCombat = { sessionId: state.sessionId, enemyMaxHp: state.enemyMaxHp };
+        document.getElementById('enemy-name').textContent  = state.enemyName;
+        document.getElementById('enemy-level').textContent = `LVL ${state.enemyLevel}`;
+        document.getElementById('enemy-emoji').textContent = state.enemyEmoji || '👹';
+        document.getElementById('enemy-hp-max').textContent = state.enemyMaxHp;
+        updateCombatUI(state);
+        switchTab(2);
+        addToLog(`⚔️ Encountered <span class="text-red-400">${state.enemyName}</span>`, 'red');
+    } catch(e) { showToast(e.message || 'Cannot start combat', 'red'); }
+}
+
+async function manualAttack() {
+    if (!activeCombat) return;
+    const btn = document.getElementById('attack-btn');
+    btn.disabled = true;
+    try {
+        const state = await apiFetch(`/combat/${activeCombat.sessionId}/attack`, 'POST');
+        if (!state) return;
+        updateCombatUI(state);
+
+        const last = state.log && state.log[0];
+        if (last) addToLog(last, 'orange');
+
+        if (state.result === 1 || state.result === 'Victory') {
+            addToLog('💥 Enemy defeated!', 'emerald');
+            showToast('Victory!', 'emerald');
+            activeCombat = null;
+            await loadPlayer();
+            setTimeout(() => showScreen(0), 1200);
+        } else if (state.result === 2 || state.result === 'Defeat') {
+            addToLog('💀 HERO DEFEATED', 'red');
+            activeCombat = null;
+            document.getElementById('modal-backdrop').classList.remove('hidden');
+            await loadPlayer();
+        }
+    } catch(e) {
+        showToast(e.message, 'red');
+    } finally {
+        btn.disabled = false;
+    }
+}
+
+function updateCombatUI(state) {
+    const maxHp = activeCombat?.enemyMaxHp || state.enemyMaxHp || 100;
+    const pct   = Math.max(0, Math.floor(state.enemyHp / maxHp * 100));
+    document.getElementById('enemy-hp-bar').style.width  = pct + '%';
+    document.getElementById('enemy-hp-text').textContent = Math.max(0, state.enemyHp);
+}
+
+async function fleeCombat() {
+    if (!activeCombat) { showScreen(0); return; }
+    try {
+        await apiFetch(`/combat/${activeCombat.sessionId}/flee`, 'POST');
+        activeCombat = null;
+        addToLog('You fled from battle...', 'amber');
+        showScreen(0);
+    } catch(e) { showToast(e.message, 'red'); }
+}
+function hideModal() {
+    document.getElementById('modal-backdrop').classList.add('hidden');
+    if (player) {
+        player.currentHp = Math.floor((player.maxHp || 120) * 0.6);
+        const pct = Math.floor(player.currentHp / player.maxHp * 100);
+        document.getElementById('hp-bar').style.width = pct + '%';
+        document.getElementById('hp-current').textContent = player.currentHp;
+        updateUI();
+    }
+}
+
+// ─── INVENTORY ─────────────────────────────────────────────────────────────
+async function renderInventory() {
+    if (!player) return;
+    const inv = player.inventory || [];
+    document.getElementById('inv-slots').textContent = `${inv.length} / 24 SLOTS`;
+    const container = document.getElementById('inventory-grid');
+    container.innerHTML = '';
+    inv.forEach(item => {
+        const div = document.createElement('div');
+        div.className = 'bg-zinc-900 border border-amber-400 hover:border-amber-300 transition-colors rounded-2xl p-4 cursor-pointer text-center';
+        div.innerHTML = `
+            <div class="text-5xl mb-3">${item.emoji || '📦'}</div>
+            <div class="text-xs font-bold">${item.name}</div>
+            <div class="text-[10px] text-amber-400">${item.slot}</div>
+            <div class="text-emerald-400 text-xs mt-4">+${item.bonus}</div>
+        `;
+        div.onclick = () => equipItem(item.id);
+        container.append(div);
+    });
+
+    const eqContainer = document.getElementById('equipped-items');
+    const eq = player.equipped || {};
+    eqContainer.innerHTML = `
+        <div onclick="unequipSlot('Weapon')" class="flex-1 bg-zinc-900 border border-amber-400 rounded-3xl p-5 cursor-pointer">
+            <div class="flex justify-between items-start">
+                <div><div class="text-xs text-orange-400">WEAPON</div><div class="font-bold text-sm">${eq.weaponName || 'None'}</div></div>
+                <div class="text-4xl">${eq.weaponEmoji || '👊'}</div>
+            </div>
+            <div class="text-xs text-emerald-400 mt-6">+${eq.weaponBonus || 0} ATK</div>
+        </div>
+        <div onclick="unequipSlot('Armor')" class="flex-1 bg-zinc-900 border border-amber-400 rounded-3xl p-5 cursor-pointer">
+            <div class="flex justify-between items-start">
+                <div><div class="text-xs text-sky-400">ARMOR</div><div class="font-bold text-sm">${eq.armorName || 'None'}</div></div>
+                <div class="text-4xl">${eq.armorEmoji || '👕'}</div>
+            </div>
+            <div class="text-xs text-emerald-400 mt-6">+${eq.armorBonus || 0} DEF</div>
+        </div>
+    `;
+}
+
+async function equipItem(itemId) {
+    try {
+        await apiFetch(`/inventory/equip/${itemId}`, 'POST');
+        showToast('Item equipped!', 'emerald');
+        await loadPlayer();
+        renderInventory();
+    } catch(e) { showToast(e.message, 'red'); }
+}
+
+async function unequipSlot(slot) {
+    try {
+        await apiFetch(`/inventory/equip/${slot}`, 'DELETE');
+        showToast('Item unequipped', 'amber');
+        await loadPlayer();
+        renderInventory();
+    } catch(e) { showToast(e.message, 'red'); }
+}
+
+// ─── IDLE REWARDS ──────────────────────────────────────────────────────────
+async function claimIdleRewards() {
+    try {
+        const r = await apiFetch('/combat/idle-rewards', 'POST');
+        if (!r) return;
+        showToast(`+${r.xpGained} XP, +${r.goldGained} Gold from ${(r.hoursClaimed||0).toFixed(1)}h offline!`, 'yellow');
+        await loadPlayer();
+    } catch(e) { showToast(e.message, 'red'); }
+}
+
+// ─── PRESTIGE ──────────────────────────────────────────────────────────────
+async function prestigeReset() {
+    if (!confirm('Prestige your hero?\n\nLevel resets to 1 but you gain permanent stat bonuses.\nRequires level 50.')) return;
+    try {
+        await apiFetch('/player/me/prestige', 'POST');
+        showToast('Prestige complete!', 'violet');
+        await loadPlayer();
+    } catch(e) { showToast(e.message, 'red'); }
+}
+
+// ─── SIGNALR ───────────────────────────────────────────────────────────────
+async function connectSignalR() {
+    if (!token) return;
+    hubConnection = new signalR.HubConnectionBuilder()
+        .withUrl('http://localhost:5098/hubs/game', { accessTokenFactory: () => token })
+        .withAutomaticReconnect()
+        .configureLogging(signalR.LogLevel.Warning)
+        .build();
+
+    hubConnection.on('LevelUp', data => {
+        showToast(`LEVEL UP! → ${data.newLevel} 🎉`, 'violet');
+        addToLog(`🏆 Reached level <span class="text-purple-300">${data.newLevel}</span>`, 'violet');
+        loadPlayer();
+    });
+
+    hubConnection.on('combatstarted', () => {});
+    hubConnection.on('combatupdate', () => {});
+    hubConnection.on('CombatVictory', data => {
+        showToast(`Victory! +${data.xpGained} XP, +${data.goldGained} Gold`, 'emerald');
+    });
+
+    hubConnection.on('QuestCompleted', data => {
+        showToast(`Quest done: ${data.title}! +${data.xpReward} XP`, 'amber');
+        loadPlayer();
+    });
+
+    hubConnection.on('Prestige', data => {
+        showToast(`Prestige ${data.newPrestigeLevel}! ${data.message}`, 'purple');
+    });
+
+    try { await hubConnection.start(); } catch(e) { console.warn('SignalR:', e.message); }
+}
+
+// ─── UI HELPERS ────────────────────────────────────────────────────────────
+function addToLog(message, color = 'amber') {
+    const log = document.getElementById('combat-log');
+    const entry = document.createElement('div');
+    entry.className = `log-entry flex gap-x-3 text-${color}-200`;
+    entry.innerHTML = `<span class="font-bold text-[10px] text-${color}-400 whitespace-nowrap">[NOW]</span><span>${message}</span>`;
+    log.appendChild(entry);
+    if (log.children.length > 12) log.removeChild(log.children[0]);
+    log.scrollTop = 9999;
+}
+
+function clearLog() {
+    document.getElementById('combat-log').innerHTML = '';
+    addToLog('Log cleared', 'amber');
+}
+
+function showToast(text, color = 'emerald') {
+    const toast = document.getElementById('toast');
+    document.getElementById('toast-text').textContent = text;
+    toast.classList.remove('hidden');
+    toast.style.borderColor = color === 'amber' ? '#f59e0b' : color === 'red' ? '#ef4444' : '#10b981';
+    setTimeout(() => toast.classList.add('hidden'), 3000);
+}
+
+function switchTab(n) {
+    document.querySelectorAll('.tab-button').forEach((tab, i) => {
+        tab.classList.toggle('active', i === n);
+        tab.classList.toggle('border-amber-400', i === n);
+        tab.classList.toggle('bg-zinc-900', i === n);
+    });
+    showScreen(n);
+}
+
+function showScreen(n) {
+    for (let i = 0; i < 4; i++) {
+        const s = document.getElementById('screen-' + i);
+        if (s) s.classList.toggle('hidden', i !== n);
+    }
+    if (n === 3) renderInventory();
+    if (n === 1) loadZones();
+}
+
+function startSessionTimer() {
+    setInterval(() => {
+        const elapsed = Math.floor((Date.now() - sessionStart) / 1000);
+        const m = Math.floor(elapsed / 60), s = elapsed % 60;
+        document.getElementById('session-time').textContent =
+            `${String(m).padStart(2,'0')}:${String(s).padStart(2,'0')}`;
+    }, 1000);
+}
+
+// ─── BOOT ──────────────────────────────────────────────────────────────────
+window.onload = async () => {
+    if (token) {
+        try {
+            await enterGame();
+        } catch(e) {
+            localStorage.removeItem('iq_token');
+            token = '';
+            document.getElementById('login-screen').classList.remove('hidden');
+        }
+    } else {
+        document.getElementById('login-screen').classList.remove('hidden');
+    }
+};
+</script>
+</body>
+</html>
