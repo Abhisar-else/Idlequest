@@ -50,6 +50,7 @@
         travel: function (zoneId) { return requestWithToken(API_BASE_URL + '/world/zones/' + zoneId + '/travel', 'POST'); },
         getInventory: function () { return requestWithToken(API_BASE_URL + '/inventory'); },
         equipItem: function (itemId) { return requestWithToken(API_BASE_URL + '/inventory/equip/' + itemId, 'POST'); },
+        unequipItem: function (slot) { return requestWithToken(API_BASE_URL + '/inventory/equip/' + slot, 'DELETE'); },
         questsAvailable: function () { return requestWithToken(API_BASE_URL + '/quests/available'); }
     };
 })(typeof window !== 'undefined' ? window : globalThis);

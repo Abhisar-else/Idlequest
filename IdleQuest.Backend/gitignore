@@ -1,0 +1,32 @@
+## .NET / ASP.NET Core
+bin/
+obj/
+*.user
+*.suo
+.vs/
+
+## Database & logs
+*.db
+*.db-shm
+*.db-wal
+*.log
+debug-*.log
+
+## Secrets — NEVER commit these
+appsettings.Development.json
+appsettings.Production.json
+secrets.json
+
+## Rider / JetBrains
+.idea/
+
+## VS Code
+.vscode/
+
+## macOS
+.DS_Store
+
+## NuGet
+*.nupkg
+.nuget/
+packages/

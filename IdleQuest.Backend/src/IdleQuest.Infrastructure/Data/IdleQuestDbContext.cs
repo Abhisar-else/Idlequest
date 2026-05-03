@@ -39,10 +39,10 @@ public class IdleQuestDbContext : DbContext
                 s.Property(x => x.CritMultiplier).HasColumnName("BaseCritMult");
             });
 
-            e.OwnsMany(p => p.Inventory, o => o.ToJson());
+            e.OwnsMany(p => p.Inventory);
             e.OwnsOne(p => p.Equipment);
             e.OwnsMany(p => p.ActiveQuests, o => o.ToJson());
-            e.OwnsMany(p => p.Skills, o => o.ToJson());
+            e.OwnsMany(p => p.Skills);
         });
 
         mb.Entity<Item>(e =>
@@ -65,7 +65,7 @@ public class IdleQuestDbContext : DbContext
         {
             e.HasKey(q => q.Id);
             e.Property(q => q.Title).HasMaxLength(200).IsRequired();
-            e.OwnsMany(q => q.Objectives, o => o.ToJson());
+            e.OwnsMany(q => q.Objectives);
         });
 
         mb.Entity<Enemy>(e =>
