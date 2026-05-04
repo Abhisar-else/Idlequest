@@ -10,7 +10,6 @@ namespace IdleQuest.Application.Services;
 
 public sealed class CombatService : ICombatService
 {
-    // FIXED: Random.Shared is thread-safe (replaces static readonly Random Rng = new())
     private static Random Rng => Random.Shared;
 
     private readonly IPlayerRepository _players;
@@ -45,6 +44,7 @@ public sealed class CombatService : ICombatService
         _cache      = cache;
     }
 
+    // ── StartAsync ──────────────────────────────────────────────────────────
     public async Task<CombatStateDto> StartAsync(Guid playerId, int zoneId, CancellationToken ct = default)
     {
         var player = await _players.GetByIdAsync(playerId, ct)
@@ -55,6 +55,23 @@ public sealed class CombatService : ICombatService
         if (player.Level < zone.RecommendedLevel - 5 && zone.Id > 1)
             throw new DomainException("You are too weak for this zone.");
 
+        // ── FIX: Revive the player if they died ────────────────────────────
+        // Root cause of the death loop: player.CurrentHp stays 0 in the DB
+        // after a defeat. Every subsequent StartAsync then immediately fires
+        // a defeat on the first enemy retaliation (Math.Max(0, 0 - dmg) = 0).
+        // Solution: restore HP to 60 % of max on every new combat session.
+        // This mirrors common idle-RPG design (AFK Arena, Idle Heroes) where
+        // heroes fully restore before each fight so the game stays playable.
+        if (player.CurrentHp <= 0)
+        {
+            var eff = player.EffectiveStats();
+            player.CurrentHp = Math.Max(1, (int)(eff.MaxHp * 0.60f));
+            // Persist the revive so the sidebar HP bar reflects reality
+            await _players.UpdateAsync(player, ct);
+            await _cache.RemoveAsync($"player:{playerId}", ct);
+        }
+
+        // Close any orphaned session still marked Ongoing
         var existing = await _sessions.GetActiveForPlayerAsync(playerId, ct);
         if (existing is not null)
         {
@@ -62,9 +79,9 @@ public sealed class CombatService : ICombatService
             await _sessions.UpdateAsync(existing, ct);
         }
 
-        var enemy = await _enemies.GetRandomForZoneAsync(zoneId, ct);
-        var maxHp = Math.Max(20, enemy.Stats.MaxHp + enemy.Level * 4);
-        var atk   = Math.Max(5,  enemy.Stats.Attack + enemy.Level * 2);
+        var enemy  = await _enemies.GetRandomForZoneAsync(zoneId, ct);
+        var maxHp  = Math.Max(20, enemy.Stats.MaxHp + enemy.Level * 4);
+        var atk    = Math.Max(5,  enemy.Stats.Attack + enemy.Level * 2);
 
         var session = new CombatSession
         {
@@ -84,7 +101,7 @@ public sealed class CombatService : ICombatService
         session.Log.Add(new CombatLogLine
         {
             At       = DateTime.UtcNow,
-            Message  = $"Encountered {enemy.Name}",
+            Message  = $"Encountered {enemy.Name}!",
             Severity = "red"
         });
 
@@ -100,6 +117,7 @@ public sealed class CombatService : ICombatService
         return Map(session, player);
     }
 
+    // ── AttackAsync ─────────────────────────────────────────────────────────
     public async Task<CombatStateDto> AttackAsync(Guid sessionId, Guid playerId, CancellationToken ct = default)
     {
         var session = await _sessions.GetByIdAsync(sessionId, ct)
@@ -110,15 +128,15 @@ public sealed class CombatService : ICombatService
 
         if (session.Result != CombatResult.Ongoing)
         {
-            var existing = await _players.GetByIdAsync(playerId, ct);
-            return Map(session, existing);
+            var stale = await _players.GetByIdAsync(playerId, ct);
+            return Map(session, stale);
         }
 
         var player = await _players.GetByIdAsync(playerId, ct)
                      ?? throw new DomainException("Player not found.");
         var eff = player.EffectiveStats();
 
-        // Player attacks enemy
+        // Player attacks
         var dmg = Math.Max(6, (int)(eff.Attack * (0.55 + Rng.NextDouble() * 0.55)));
         session.EnemyHp -= dmg;
         session.Log.Add(new CombatLogLine
@@ -130,6 +148,7 @@ public sealed class CombatService : ICombatService
 
         if (session.EnemyHp <= 0)
         {
+            // ── Victory ──────────────────────────────────────────────────
             session.Result  = CombatResult.Victory;
             session.EnemyHp = 0;
 
@@ -140,11 +159,14 @@ public sealed class CombatService : ICombatService
             player.AddGold(gold);
             player.EnemiesSlain++;
 
-            // FIXED: real loot from item repository
             await GrantRealLoot(player, ct);
-
-            // NEW: advance kill quest objectives
             await AdvanceKillQuests(player, ct);
+
+            // FIX: also do a partial HP regen on victory so longer play
+            // sessions feel rewarding, not punishing. Restores 20 % of max HP
+            // (capped at full). This mirrors most idle RPGs' between-fight heal.
+            var maxHp = player.EffectiveStats().MaxHp;
+            player.CurrentHp = Math.Min(maxHp, player.CurrentHp + (int)(maxHp * 0.20f));
 
             await _players.UpdateAsync(player, ct);
             await _dispatcher.DispatchAsync(player.DomainEvents, ct);
@@ -160,13 +182,13 @@ public sealed class CombatService : ICombatService
             session.Log.Add(new CombatLogLine
             {
                 At       = DateTime.UtcNow,
-                Message  = "Victory!",
+                Message  = $"Victory! +{xp} XP, +{gold} Gold",
                 Severity = "emerald"
             });
         }
         else
         {
-            // Enemy retaliates
+            // ── Enemy retaliates ──────────────────────────────────────────
             var enemyDmg = Math.Max(4, session.EnemyAttack - eff.Defense / 3 + Rng.Next(6));
             player.CurrentHp = Math.Max(0, player.CurrentHp - enemyDmg);
             session.Log.Add(new CombatLogLine
@@ -180,10 +202,19 @@ public sealed class CombatService : ICombatService
             {
                 session.Result   = CombatResult.Defeat;
                 player.CurrentHp = 0;
+
+                // ── Death penalty: lose 5 % of current gold (not brutal,
+                // but enough to make death feel meaningful per idle RPG
+                // design principle of "setback without full wipe").
+                var penalty = (long)(player.Gold * 0.05);
+                player.Gold = Math.Max(0, player.Gold - penalty);
+
                 session.Log.Add(new CombatLogLine
                 {
                     At       = DateTime.UtcNow,
-                    Message  = "You were defeated...",
+                    Message  = penalty > 0
+                                   ? $"Defeated! Lost {penalty} gold."
+                                   : "You were defeated...",
                     Severity = "red"
                 });
             }
@@ -199,6 +230,7 @@ public sealed class CombatService : ICombatService
         return dto;
     }
 
+    // ── FleeAsync ───────────────────────────────────────────────────────────
     public async Task<CombatStateDto> FleeAsync(Guid sessionId, Guid playerId, CancellationToken ct = default)
     {
         var session = await _sessions.GetByIdAsync(sessionId, ct)
@@ -211,7 +243,7 @@ public sealed class CombatService : ICombatService
         session.Log.Add(new CombatLogLine
         {
             At       = DateTime.UtcNow,
-            Message  = "You fled.",
+            Message  = "You fled from battle!",
             Severity = "amber"
         });
 
@@ -220,10 +252,11 @@ public sealed class CombatService : ICombatService
         return Map(session, player!);
     }
 
+    // ── ClaimIdleRewardsAsync ───────────────────────────────────────────────
     public async Task<IdleRewardsDto> ClaimIdleRewardsAsync(Guid playerId, CancellationToken ct = default)
     {
-        var player  = await _players.GetByIdAsync(playerId, ct)
-                      ?? throw new DomainException("Player not found.");
+        var player = await _players.GetByIdAsync(playerId, ct)
+                     ?? throw new DomainException("Player not found.");
         var now     = DateTime.UtcNow;
         var offline = now - player.LastLoginAt;
         if (offline < TimeSpan.Zero) offline = TimeSpan.Zero;
@@ -236,6 +269,12 @@ public sealed class CombatService : ICombatService
         player.AddGold(gold);
         player.RecordLogin();
 
+        // FIX: also fully restore HP when claiming idle rewards.
+        // If the player died and comes back hours later, they should be
+        // able to play — claiming idle rewards acts as a "rest" action.
+        var maxHp = player.EffectiveStats().MaxHp;
+        player.CurrentHp = maxHp;
+
         await _players.UpdateAsync(player, ct);
         await _dispatcher.DispatchAsync(player.DomainEvents, ct);
         player.ClearEvents();
@@ -244,7 +283,8 @@ public sealed class CombatService : ICombatService
         return new IdleRewardsDto(xp, gold, capped);
     }
 
-    // FIXED: draws loot from the actual seeded Item table (45% chance per victory)
+    // ── Private helpers ─────────────────────────────────────────────────────
+
     private async Task GrantRealLoot(Player player, CancellationToken ct)
     {
         if (Rng.NextDouble() > 0.45) return;
@@ -253,7 +293,6 @@ public sealed class CombatService : ICombatService
         if (allItems.Count == 0) return;
 
         var template = allItems[Rng.Next(allItems.Count)];
-
         player.ItemsFound++;
         player.Inventory.Add(new InventoryEntry
         {
@@ -267,7 +306,6 @@ public sealed class CombatService : ICombatService
         });
     }
 
-    // NEW: increments progress on active kill quest objectives
     private async Task AdvanceKillQuests(Player player, CancellationToken ct)
     {
         if (player.ActiveQuests.Count == 0) return;
@@ -286,7 +324,7 @@ public sealed class CombatService : ICombatService
         }
     }
 
-    private static CombatStateDto Map(CombatSession s, Domain.Aggregates.Player? p)
+    private static CombatStateDto Map(CombatSession s, Player? p)
     {
         var eff = p?.EffectiveStats();
         var log = s.Log

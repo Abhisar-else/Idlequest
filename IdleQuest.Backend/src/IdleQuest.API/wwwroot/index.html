@@ -330,13 +330,15 @@
          class="max-w-md w-full bg-zinc-900 border-4 border-amber-400 rounded-3xl p-8 text-center">
         <div class="text-7xl mb-6">💀</div>
         <h3 class="text-3xl font-bold mb-2">YOUR HERO FELL...</h3>
-        <p class="text-amber-400 text-sm mb-8">But fear not! Your progress has been saved.</p>
+        <p class="text-amber-400 text-sm mb-2">You lost 5% of your gold as a death penalty.</p>
+        <p id="death-gold-penalty" class="text-yellow-300 text-xs font-mono mb-6"></p>
+        <p class="text-zinc-400 text-xs mb-8">Your hero will revive at 60% HP for the next fight.</p>
         <button onclick="hideModal();showScreen(0)"
             class="w-full h-14 bg-amber-400 text-black font-bold rounded-2xl text-xs mb-3">CONTINUE ADVENTURING</button>
-        <button onclick="hideModal();startCombat()"
-            class="w-full h-14 bg-red-700 hover:bg-red-600 text-white font-bold rounded-2xl text-xs mb-3">FIGHT AGAIN</button>
+        <button onclick="fightAgain()"  id="fight-again-btn"
+            class="w-full h-14 bg-red-700 hover:bg-red-600 text-white font-bold rounded-2xl text-xs mb-3">⚔️ FIGHT AGAIN</button>
         <button onclick="claimIdleRewards();hideModal();showScreen(0)"
-            class="w-full h-14 bg-zinc-700 hover:bg-zinc-600 text-white font-bold rounded-2xl text-xs">CLAIM IDLE REWARDS</button>
+            class="w-full h-14 bg-zinc-700 hover:bg-zinc-600 text-white font-bold rounded-2xl text-xs">CLAIM IDLE REWARDS + FULL HEAL</button>
     </div>
 </div>
 
@@ -637,22 +639,22 @@ async function loadZones() {
 // ─── COMBAT ────────────────────────────────────────────────────────────────
 async function startCombat() {
     try {
-        if (player && player.currentHp <= 0) {
-            player.currentHp = Math.floor((player.maxHp || 120) * 0.6);
-            updateUI();
-        }
+        // Backend now handles revival if HP=0 (CombatService.StartAsync).
+        // No local HP patch needed here — just call the API.
         const state = await apiFetch(`/combat/start/${currentZoneId}`, 'POST');
         if (!state) return;
-        // CombatStateDto fields: sessionId, enemyId, enemyName, enemyEmoji, enemyLevel,
-        //                        enemyHp, enemyMaxHp, playerHp, playerMaxHp, result, recentLog
+
         activeCombat = { sessionId: state.sessionId, enemyMaxHp: state.enemyMaxHp };
-        document.getElementById('enemy-name').textContent  = state.enemyName;
-        document.getElementById('enemy-level').textContent = `LVL ${state.enemyLevel}`;
-        document.getElementById('enemy-emoji').textContent = state.enemyEmoji || '👹';
+        document.getElementById('enemy-name').textContent   = state.enemyName;
+        document.getElementById('enemy-level').textContent  = `LVL ${state.enemyLevel}`;
+        document.getElementById('enemy-emoji').textContent  = state.enemyEmoji || '👹';
         document.getElementById('enemy-hp-max').textContent = state.enemyMaxHp;
+
+        // Refresh player data from server so sidebar HP bar reflects the revive
+        await loadPlayer();
         updateCombatUI(state);
         switchTab(2);
-        addToLog(`⚔️ Encountered <span class="text-red-400">${state.enemyName}</span>`, 'red');
+        addToLog(`⚔️ Encountered <span class="text-red-400">${state.enemyName}</span>!`, 'red');
     } catch(e) { showToast(e.message || 'Cannot start combat', 'red'); }
 }
 
@@ -665,12 +667,16 @@ async function manualAttack() {
         if (!state) return;
         updateCombatUI(state);
 
-        // FIX: CombatStateDto uses RecentLog → serializes as 'recentLog', not 'log'
-        const last = state.recentLog && state.recentLog[0];
-        if (last) addToLog(last, 'orange');
+        // Show all new log lines (recentLog is ordered newest-first)
+        if (state.recentLog && state.recentLog.length) {
+            // Index 1 = player attack message, index 0 = enemy retaliation or victory
+            const attackMsg = state.recentLog[1];
+            const resultMsg = state.recentLog[0];
+            if (attackMsg) addToLog(attackMsg, 'orange');
+            if (resultMsg && resultMsg !== attackMsg) addToLog(resultMsg, 'red');
+        }
 
-        // CombatResult enum: Ongoing=0, Victory=1, Defeat=2, Fled=3
-        // System.Text.Json serializes enums as integers by default
+        // CombatResult: Ongoing=0, Victory=1, Defeat=2, Fled=3
         if (state.result === 1 || state.result === 'Victory') {
             addToLog('💥 Enemy defeated!', 'emerald');
             showToast('Victory!', 'emerald');
@@ -687,11 +693,14 @@ async function manualAttack() {
             activeCombat = null;
             await loadPlayer();
             setTimeout(() => showScreen(0), 1200);
+
         } else if (state.result === 2 || state.result === 'Defeat') {
-            addToLog('💀 HERO DEFEATED', 'red');
+            addToLog('💀 HERO DEFEATED!', 'red');
             activeCombat = null;
-            document.getElementById('modal-backdrop').classList.remove('hidden');
+
+            // Fetch updated player so modal can show gold penalty
             await loadPlayer();
+            showDeathModal();
         }
     } catch(e) {
         showToast(e.message, 'red');
@@ -701,10 +710,27 @@ async function manualAttack() {
 }
 
 function updateCombatUI(state) {
+    // Enemy HP bar
     const maxHp = activeCombat?.enemyMaxHp || state.enemyMaxHp || 100;
     const pct   = Math.max(0, Math.floor(state.enemyHp / maxHp * 100));
     document.getElementById('enemy-hp-bar').style.width  = pct + '%';
     document.getElementById('enemy-hp-text').textContent = Math.max(0, state.enemyHp);
+
+    // FIX: also update the sidebar player HP bar in real-time during combat.
+    // Previously the sidebar HP only updated when loadPlayer() was called (after
+    // combat ends), so players had no feedback they were taking damage mid-fight.
+    if (state.playerHp !== undefined && state.playerMaxHp) {
+        const playerPct = Math.max(0, Math.floor(state.playerHp / state.playerMaxHp * 100));
+        document.getElementById('hp-bar').style.width     = playerPct + '%';
+        document.getElementById('hp-current').textContent = Math.max(0, state.playerHp);
+        document.getElementById('hp-max').textContent     = state.playerMaxHp;
+        // Flash red when taking serious damage (below 30%)
+        if (playerPct < 30) {
+            document.getElementById('hp-bar').style.background = '#ef4444';
+        } else {
+            document.getElementById('hp-bar').style.background = '';
+        }
+    }
 }
 
 async function fleeCombat() {
@@ -717,15 +743,35 @@ async function fleeCombat() {
     } catch(e) { showToast(e.message, 'red'); }
 }
 
+// showDeathModal: called after defeat — player data already reloaded from server
+function showDeathModal() {
+    // Show current gold in the modal so the player sees the death penalty
+    const goldPenaltyEl = document.getElementById('death-gold-penalty');
+    if (goldPenaltyEl && player) {
+        goldPenaltyEl.textContent = `Gold remaining: ${player.gold}`;
+    }
+    document.getElementById('modal-backdrop').classList.remove('hidden');
+}
+
+// hideModal: just closes the overlay.
+// HP is NOT set here — backend already restored it to 60% in StartAsync.
+// loadPlayer() will pull the correct value from the server.
 function hideModal() {
     document.getElementById('modal-backdrop').classList.add('hidden');
-    if (player) {
-        // Restore partial HP so the player can keep playing
-        player.currentHp = Math.floor((player.maxHp || 120) * 0.6);
-        const pct = Math.floor(player.currentHp / player.maxHp * 100);
-        document.getElementById('hp-bar').style.width     = pct + '%';
-        document.getElementById('hp-current').textContent = player.currentHp;
-        updateUI();
+}
+
+// fightAgain: safe wrapper that closes the modal FIRST, then starts combat.
+// The old pattern (hideModal(); startCombat()) ran both synchronously — the
+// modal could still be visible while the combat screen was loading. Now we
+// await startCombat so the user sees the revive before the combat screen.
+async function fightAgain() {
+    const btn = document.getElementById('fight-again-btn');
+    if (btn) { btn.disabled = true; btn.textContent = '⏳ REVIVING...'; }
+    hideModal();
+    try {
+        await startCombat();   // backend revives HP to 60% inside StartAsync
+    } finally {
+        if (btn) { btn.disabled = false; btn.textContent = '⚔️ FIGHT AGAIN'; }
     }
 }
 
