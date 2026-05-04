@@ -4,6 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>IdleQuest • Idle RPG</title>
+    <!-- Tailwind CDN: replace with Tailwind CLI output for production -->
     <script src="https://cdn.tailwindcss.com"></script>
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css">
     <script src="https://cdnjs.cloudflare.com/ajax/libs/microsoft-signalr/7.0.5/signalr.min.js"></script>
@@ -171,7 +172,8 @@
                             <div id="gold" class="text-2xl font-bold text-yellow-300">0</div>
                         </div>
                     </div>
-                    <div onclick="claimIdleRewards()" class="text-[10px] bg-emerald-900 hover:bg-emerald-700 px-4 py-2 rounded-lg cursor-pointer flex items-center gap-x-1">
+                    <div onclick="claimIdleRewards()" id="claim-btn" class="relative text-[10px] bg-emerald-900 hover:bg-emerald-700 px-4 py-2 rounded-lg cursor-pointer flex items-center gap-x-1">
+                        <span id="idle-badge" class="hidden absolute -top-1 -right-1 w-3 h-3 bg-yellow-400 rounded-full animate-pulse"></span>
                         <i class="fa-solid fa-clock"></i><span>CLAIM</span>
                     </div>
                 </div>
@@ -193,7 +195,7 @@
             <!-- DASHBOARD -->
             <div id="screen-0">
                 <div class="grid grid-cols-12 gap-6">
-                    <div class="col-span-12 lg:col-span-7 bg-zinc-900 border border-amber-400 rounded-3xl p-6 pixel-border">
+                    <div class="col-span-12 lg:col-span-7 bg-zinc-900 border border-amber-400 rounded-3xl p-6 pixel-border overflow-hidden">
                         <div class="flex gap-8">
                             <div class="flex-1">
                                 <div class="uppercase text-xs tracking-[2px] mb-3 text-amber-400">YOUR HERO</div>
@@ -216,8 +218,11 @@
                                     </div>
                                 </div>
                             </div>
-                            <div class="w-52 flex flex-col items-center justify-center border-l border-amber-400 pl-8">
-                                <div id="hero-emoji" class="text-[110px] leading-none mb-4">🛡️</div>
+                            <div class="hidden sm:flex flex-shrink-0 flex-col items-center justify-center border-l border-amber-400 pl-6 ml-2">
+                                <div id="hero-emoji"
+                                     class="w-24 h-24 flex items-center justify-center
+                                            bg-zinc-800 rounded-2xl border-2 border-amber-700
+                                            text-6xl select-none overflow-hidden">🛡️</div>
                             </div>
                         </div>
                     </div>
@@ -272,7 +277,18 @@
                             <div>ENEMY HP</div>
                             <div><span id="enemy-hp-text">100</span>/<span id="enemy-hp-max">100</span></div>
                         </div>
-                        <div class="flex gap-x-4 mt-10">
+                        <!-- AUTO / MANUAL toggle -->
+                        <div class="flex gap-x-2 mt-6 justify-center">
+                            <button onclick="toggleAutoMode()" id="auto-btn"
+                                class="text-[10px] px-5 py-2 rounded-xl border border-zinc-500 text-zinc-400 hover:border-amber-400 hover:text-amber-300 transition-colors">
+                                ⚙️ AUTO: OFF
+                            </button>
+                            <div id="auto-indicator" class="hidden text-[10px] text-emerald-400 flex items-center gap-x-1">
+                                <div class="w-2 h-2 bg-emerald-400 rounded-full animate-pulse"></div>
+                                <span>Fighting...</span>
+                            </div>
+                        </div>
+                        <div class="flex gap-x-4 mt-3">
                             <button onclick="manualAttack()" id="attack-btn"
                                 class="flex-1 bg-red-600 hover:bg-red-500 transition-all py-6 rounded-2xl text-white font-bold text-sm tracking-widest flex items-center justify-center gap-x-2">
                                 <i class="fa-solid fa-swords"></i><span>ATTACK</span>
@@ -345,14 +361,18 @@
 <script>
 // ─── CONFIG ────────────────────────────────────────────────────────────────
 const API = 'http://localhost:5098/api';  // change port if yours differs
-let token           = localStorage.getItem('iq_token') || '';
-let currentZoneId   = 1;
-let activeCombat    = null;   // { sessionId, enemyMaxHp }
-let sessionStart    = Date.now();
-let player          = null;
-let hubConnection   = null;
-let inventoryData   = null;   // FIX: inventory is a separate API call (/inventory), not part of /player/me
-let activeQuestsLocal = [];   // FIX: activeQuests are not in PlayerSummaryDto; track locally
+const AUTO_MS = 2000;  // auto-combat attack interval
+
+let token             = localStorage.getItem('iq_token') || '';
+let currentZoneId     = 1;
+let activeCombat      = null;   // { sessionId, enemyMaxHp }
+let sessionStart      = Date.now();
+let player            = null;
+let hubConnection     = null;
+let inventoryData     = null;
+let activeQuestsLocal = [];
+let autoCombatTimer   = null;   // setInterval handle — null = manual mode
+let autoMode          = false;
 
 // ─── AUTH HELPERS ──────────────────────────────────────────────────────────
 function authHeader() {
@@ -365,9 +385,11 @@ async function apiFetch(path, method = 'GET', body = null) {
     const opts = { method, headers: authHeader() };
     if (body) opts.body = JSON.stringify(body);
     const res = await fetch(API + path, opts);
-    if (res.status === 401) { logout(); return null; }
+    // Only treat 401 as "session expired" when we already have a token.
+    // Auth endpoints return 401 for wrong credentials — must fall through to error handler.
+    if (res.status === 401 && token) { logout(); return null; }
     if (!res.ok) {
-        // FIX: ExceptionHandlingMiddleware returns { error: "..." }, not { message: "..." }
+        // AuthResultDto and ExceptionHandlingMiddleware both use { error: "..." }
         const err = await res.json().catch(() => ({ error: res.statusText }));
         throw new Error(err.error || err.message || res.statusText);
     }
@@ -431,6 +453,7 @@ async function doRegister() {
 }
 
 function logout() {
+    stopAutoCombat();
     localStorage.removeItem('iq_token');
     token = '';
     player = null;
@@ -452,6 +475,7 @@ async function enterGame() {
     connectSignalR();
     setInterval(loadPlayer, 30000);
     addToLog('Welcome back to IdleQuest!', 'amber');
+    checkOfflineBadge();
 }
 
 // ─── PLAYER ────────────────────────────────────────────────────────────────
@@ -564,15 +588,19 @@ async function acceptQuest(id) {
         const accepted = await apiFetch(`/quests/${id}/accept`, 'POST');
         if (!accepted) return;
 
-        // FIX: store locally since PlayerSummaryDto doesn't carry activeQuests
         // QuestDto: { id, title, requiredLevel, goldReward, xpReward, objectives[] }
-        // objectives is List<string> (descriptions only); default targetAmount to 1 for kill quests
+        // objectives is List<string> descriptions e.g. ["Win one combat encounter"]
+        // Determine targetAmount from objectives length (each is typically target=1)
+        const isKillQuest  = accepted.objectives && accepted.objectives.some(o => o.toLowerCase().includes('win') || o.toLowerCase().includes('kill') || o.toLowerCase().includes('combat'));
+        const isVisitQuest = accepted.objectives && accepted.objectives.some(o => o.toLowerCase().includes('travel') || o.toLowerCase().includes('visit'));
         activeQuestsLocal.push({
             id:           accepted.id,
             title:        accepted.title,
             progress:     0,
-            targetAmount: 1,   // backend "First Blood" quest has TargetAmount = 1
-            completed:    false
+            targetAmount: 1,
+            completed:    false,
+            type:         isVisitQuest ? 'visit' : 'kill',
+            objectives:   accepted.objectives || []
         });
 
         showToast('Quest accepted!', 'amber');
@@ -627,6 +655,18 @@ async function loadZones() {
                     await apiFetch(`/world/zones/${zone.id}/travel`, 'POST');
                     currentZoneId = zone.id;
                     showToast('Travelled to ' + zone.name, 'emerald');
+                    // Advance local "visit" quest objectives for this zone
+                    activeQuestsLocal.forEach(q => {
+                        if (!q.completed && q.objectives &&
+                            q.objectives.some(o => o.toLowerCase().includes(zone.name.toLowerCase()))) {
+                            q.progress = Math.min((q.progress || 0) + 1, q.targetAmount || 1);
+                            if (q.progress >= (q.targetAmount || 1)) {
+                                q.completed = true;
+                                showToast('Quest ready: ' + q.title + '!', 'emerald');
+                            }
+                        }
+                    });
+                    renderQuestList(activeQuestsLocal);
                     await loadPlayer();
                     loadZones();
                 } catch(e) { showToast(e.message, 'red'); }
@@ -639,8 +679,6 @@ async function loadZones() {
 // ─── COMBAT ────────────────────────────────────────────────────────────────
 async function startCombat() {
     try {
-        // Backend now handles revival if HP=0 (CombatService.StartAsync).
-        // No local HP patch needed here — just call the API.
         const state = await apiFetch(`/combat/start/${currentZoneId}`, 'POST');
         if (!state) return;
 
@@ -655,6 +693,14 @@ async function startCombat() {
         updateCombatUI(state);
         switchTab(2);
         addToLog(`⚔️ Encountered <span class="text-red-400">${state.enemyName}</span>!`, 'red');
+        // Restore auto-mode UI if chained from previous fight
+        if (autoMode) {
+            const btn = document.getElementById('auto-btn');
+            const ind = document.getElementById('auto-indicator');
+            if (btn) { btn.textContent = '⚙️ AUTO: ON'; btn.classList.add('border-emerald-400','text-emerald-300'); btn.classList.remove('border-zinc-500','text-zinc-400'); }
+            if (ind) ind.classList.remove('hidden');
+            startAutoCombat();
+        }
     } catch(e) { showToast(e.message || 'Cannot start combat', 'red'); }
 }
 
@@ -690,12 +736,28 @@ async function manualAttack() {
             });
             renderQuestList(activeQuestsLocal);
 
+            const wasAuto = autoMode;   // capture before stopAutoCombat clears it
+            stopAutoCombat();
             activeCombat = null;
             await loadPlayer();
-            setTimeout(() => showScreen(0), 1200);
+
+            if (wasAuto) {
+                // Idle loop: show dashboard briefly then auto-start next fight
+                showScreen(0);
+                addToLog('⚙️ Auto-mode: next fight in 2s...', 'amber');
+                setTimeout(async () => {
+                    if (autoMode === false) {  // user may have toggled off
+                        autoMode = true;
+                        await startCombat();
+                    }
+                }, 2000);
+            } else {
+                setTimeout(() => showScreen(0), 1200);
+            }
 
         } else if (state.result === 2 || state.result === 'Defeat') {
             addToLog('💀 HERO DEFEATED!', 'red');
+            stopAutoCombat();
             activeCombat = null;
 
             // Fetch updated player so modal can show gold penalty
@@ -734,6 +796,7 @@ function updateCombatUI(state) {
 }
 
 async function fleeCombat() {
+    stopAutoCombat();
     if (!activeCombat) { showScreen(0); return; }
     try {
         await apiFetch(`/combat/${activeCombat.sessionId}/flee`, 'POST');
@@ -802,15 +865,22 @@ function renderInventory() {
     const container = document.getElementById('inventory-grid');
     container.innerHTML = '';
     inv.forEach(item => {
+        const isConsumable = item.slot === 'Consumable';
         const div = document.createElement('div');
-        div.className = 'bg-zinc-900 border border-amber-400 hover:border-amber-300 transition-colors rounded-2xl p-4 cursor-pointer text-center';
+        div.className = 'bg-zinc-900 border border-amber-400 hover:border-amber-300 transition-colors rounded-2xl p-4 text-center';
         div.innerHTML = `
             <div class="text-5xl mb-3">${item.emoji || '📦'}</div>
             <div class="text-xs font-bold">${item.name}</div>
-            <div class="text-[10px] text-amber-400">${item.slot}</div>
-            <div class="text-emerald-400 text-xs mt-4">+${item.bonus}</div>
+            <div class="text-[10px] text-amber-400 mb-2">${item.slot}</div>
+            <div class="text-emerald-400 text-xs mb-3">${isConsumable ? '❤️ Restores HP' : '+' + item.bonus + ' bonus'}</div>
+            <div class="flex gap-1 justify-center">
+                ${isConsumable
+                    ? `<button onclick="useItem('${item.id}')" class="text-[9px] bg-emerald-800 hover:bg-emerald-600 px-2 py-1 rounded text-emerald-200">USE</button>`
+                    : `<button onclick="equipItem('${item.id}')" class="text-[9px] bg-amber-900 hover:bg-amber-700 px-2 py-1 rounded text-amber-200">EQUIP</button>`
+                }
+                <button onclick="sellItem('${item.id}')" class="text-[9px] bg-zinc-700 hover:bg-zinc-600 px-2 py-1 rounded text-zinc-300">SELL</button>
+            </div>
         `;
-        div.onclick = () => equipItem(item.id);
         container.append(div);
     });
 
@@ -863,6 +933,76 @@ async function unequipSlot(slot) {
         inventoryData = null;   // invalidate so it reloads
         await loadPlayer();
         await loadInventory();
+    } catch(e) { showToast(e.message, 'red'); }
+}
+
+// ─── AUTO COMBAT ───────────────────────────────────────────────────────────
+function startAutoCombat() {
+    if (autoCombatTimer) return; // already running
+    autoCombatTimer = setInterval(async () => {
+        if (!activeCombat || !autoMode) { stopAutoCombat(); return; }
+        await manualAttack();
+    }, AUTO_MS);
+}
+
+function stopAutoCombat() {
+    if (autoCombatTimer) { clearInterval(autoCombatTimer); autoCombatTimer = null; }
+    autoMode = false;
+    const btn = document.getElementById('auto-btn');
+    const ind = document.getElementById('auto-indicator');
+    if (btn) { btn.textContent = '⚙️ AUTO: OFF'; btn.classList.remove('border-emerald-400','text-emerald-300'); btn.classList.add('border-zinc-500','text-zinc-400'); }
+    if (ind) ind.classList.add('hidden');
+}
+
+function toggleAutoMode() {
+    if (!activeCombat) { showToast('Start a combat first!', 'amber'); return; }
+    autoMode = !autoMode;
+    const btn = document.getElementById('auto-btn');
+    const ind = document.getElementById('auto-indicator');
+    if (autoMode) {
+        btn.textContent = '⚙️ AUTO: ON';
+        btn.classList.add('border-emerald-400','text-emerald-300');
+        btn.classList.remove('border-zinc-500','text-zinc-400');
+        ind.classList.remove('hidden');
+        startAutoCombat();
+    } else {
+        stopAutoCombat();
+    }
+}
+
+// ─── OFFLINE BADGE ─────────────────────────────────────────────────────────
+function checkOfflineBadge() {
+    if (!player) return;
+    // Show pulsing badge if offline > 5 minutes
+    const lastLogin = new Date(player.lastLoginAt || 0);
+    const offlineMs = Date.now() - lastLogin.getTime();
+    const badge = document.getElementById('idle-badge');
+    if (badge) badge.classList.toggle('hidden', offlineMs < 5 * 60 * 1000);
+}
+
+// ─── USE CONSUMABLE ─────────────────────────────────────────────────────────
+async function useItem(itemId) {
+    try {
+        const updated = await apiFetch(`/inventory/${itemId}/use`, 'POST');
+        if (!updated) return;
+        player = updated;   // PlayerSummaryDto returned
+        updateUI();
+        inventoryData = null;
+        await loadInventory();
+        showToast('Item used! HP restored.', 'emerald');
+        addToLog('🧪 Used a consumable item', 'emerald');
+    } catch(e) { showToast(e.message, 'red'); }
+}
+
+// ─── SELL ITEM ──────────────────────────────────────────────────────────────
+async function sellItem(itemId) {
+    try {
+        const r = await apiFetch(`/inventory/${itemId}/sell`, 'POST');
+        if (!r) return;
+        if (r.player) { player = r.player; updateUI(); }
+        inventoryData = null;
+        await loadInventory();
+        showToast(`Sold for ${r.goldGained} gold!`, 'yellow');
     } catch(e) { showToast(e.message, 'red'); }
 }
 

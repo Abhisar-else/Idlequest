@@ -36,8 +36,8 @@ public sealed class InventoryController : ControllerBase
         var s = slot.ToLowerInvariant() switch
         {
             "weapon" => ItemSlot.Weapon,
-            "armor" => ItemSlot.Armor,
-            _ => throw new DomainException("Slot must be weapon or armor.")
+            "armor"  => ItemSlot.Armor,
+            _        => throw new DomainException("Slot must be weapon or armor.")
         };
         var p = await _inv.UnequipAsync(User.GetPlayerId(), s, ct);
         return p is null ? NotFound() : Ok(p);
@@ -48,5 +48,16 @@ public sealed class InventoryController : ControllerBase
     {
         var r = await _inv.SellAsync(User.GetPlayerId(), itemId, ct);
         return r is null ? NotFound() : Ok(new { player = r.Value.Player, goldGained = r.Value.GoldGained });
+    }
+
+    /// <summary>
+    /// POST /api/inventory/{itemId}/use
+    /// Uses a consumable item (e.g. Health Potion). Removes item, applies effect, returns updated player.
+    /// </summary>
+    [HttpPost("{itemId:guid}/use")]
+    public async Task<IActionResult> Use(Guid itemId, CancellationToken ct)
+    {
+        var p = await _inv.UseAsync(User.GetPlayerId(), itemId, ct);
+        return p is null ? NotFound() : Ok(p);
     }
 }
